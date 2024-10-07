@@ -1,4 +1,5 @@
 import time
+import serial
 import tkinter as tk
 from tkinter import Label, Scale, Button, Toplevel, messagebox, Entry, StringVar, Frame, ttk, simpledialog
 from PIL import Image, ImageTk
@@ -18,7 +19,6 @@ DEBUG_MODE = True  # Set to False in production
 
 # Global variables for allowed voltage labels
 allowed_voltage_labels = {}
-
 logo_photo = None
 diagram_photo = None
 root_images = {}
@@ -32,11 +32,22 @@ original_diagram_width, original_diagram_height = original_diagram_image.size
 last_resize_time = 0
 resize_delay = 500  # Delay in milliseconds
 
-# Global variables for voltage ranges - set these based on your specific requirements
-spool_motor_voltage_range = (7.68, 15.36)
-cutter_motor_voltage_range = (5, 10)
-extra_plastics_motor_voltage_range = (6, 12)
-plastics_cooling_motor_voltage_range = (4, 8)
+# Global dictionary to hold the labels for displaying allowed PWM duty cycles
+allowed_percentage_labels = {}
+
+# Global variables for percentage ranges - set these based on your specific requirements
+spool_motor_percentage_range = (20, 100)
+cutter_motor_percentage_range = (10, 90)
+extra_plastics_motor_percentage_range = (15, 85)
+plastics_cooling_motor_percentage_range = (25, 95)
+
+# Default PWM duty cycles for each motor type, representing a standard operational point
+default_pwm_settings = {
+    'Spool Motor': 50,  # Nominal PWM percentage for normal operation
+    'Cutter Motor': 30,
+    'Extra Plastics Motor': 40,
+    'Plastics Cooling': 35
+}
 
 # Global variables for scales and labels
 motor_max_temp_scale = None
@@ -47,6 +58,16 @@ spool_motor_voltage_label = None
 cutter_motor_voltage_label = None
 extra_plastics_motor_voltage_label = None
 plastics_cooling_motor_voltage_label = None
+
+# Global variables for percentage entry StringVars
+spool_motor_min_percentage_var = None
+spool_motor_max_percentage_var = None
+cutter_motor_min_percentage_var = None
+cutter_motor_max_percentage_var = None
+extra_plastics_motor_min_percentage_var = None
+extra_plastics_motor_max_percentage_var = None
+plastics_cooling_motor_min_percentage_var = None
+plastics_cooling_motor_max_percentage_var = None
 
 # Global variables for Entry widgets
 spool_motor_min_voltage_entry = None
@@ -80,33 +101,127 @@ cutter_motor_interval_label = None
 extra_plastics_motor_interval_label = None
 plastics_cooling_motor_interval_label = None
 
+# Global variable for settings window
+global settings_window
+settings_window = None  # Initialize to None
+
 # Global variables to store the delayed resize task and last window size
 resize_task = None
 last_window_size = (0, 0)
 
+####################################################
+
 # Simulate a serial connection (for debug mode)
 class FakeSerial:
     def write(self, command):
-        print(f"Sending command to Arduino: {command.decode().strip()}")
+        print(f"Sending command to Arduino (simulated): {command.decode().strip()}")
+
+    def readline(self):
+        # Simulate receiving a response from Arduino, modify as necessary
+        return b"Simulated response from Arduino\n"
+
     def close(self):
-        print("Closing fake serial connection")
+        print("Closing fake serial connection (simulated)")
+
+    def in_waiting(self):
+        # Simulate data waiting to be read
+        return 0
+    
+class ArduinoController:
+    def __init__(self, serial_port='COM_PORT', baud_rate=9600):
+        self.port = serial_port
+        self.baud_rate = baud_rate
+        self.arduino = self.connect_to_arduino()
+
+    def connect_to_arduino(self):
+        if DEBUG_MODE:
+            print(f"Debug mode: Simulating connection to {self.port} at {self.baud_rate} baud")
+            return FakeSerial()
+        else:
+            try:
+                arduino = serial.Serial(self.port, self.baud_rate, timeout=1)
+                print(f"Connected to Arduino on {self.port} at {self.baud_rate} baud")
+                return arduino
+            except serial.SerialException as e:
+                messagebox.showerror("Connection Error", f"Could not connect to {self.port}: {e}")
+                return None
+
+    def send_data_to_arduino(self, command):
+        if self.arduino:
+            try:
+                self.arduino.write((command + '\n').encode('utf-8'))
+                print(f"Command sent: {command}")
+                
+                if self.arduino.in_waiting > 0:
+                    response = self.arduino.readline().decode('utf-8').strip()
+                    print(f"Arduino response: {response}")
+                    return response
+                else:
+                    print("No response received from Arduino.")
+                    return None
+            except serial.SerialException as e:
+                print(f"Serial communication error: {e}")
+                self.arduino.close()
+                self.arduino = None
+                self.arduino = self.connect_to_arduino()
+            except Exception as e:
+                print(f"Error sending data to Arduino: {e}")
+                self.arduino.close()
+                self.arduino = None
+        else:
+            print("Arduino connection not established.")
+            self.arduino = self.connect_to_arduino()
+
+    def fan_on(self):
+        self.send_data_to_arduino("FAN_ON")
+
+    def fan_off(self):
+        self.send_data_to_arduino("FAN_OFF")
+
+    def set_fan_pwm(self, pwm_value):
+        self.send_data_to_arduino(f"SET_FAN_PWM:{pwm_value}")
+
+    def winder_on(self):
+        self.send_data_to_arduino("WINDER_ON")
+
+    def winder_off(self):
+        self.send_data_to_arduino("WINDER_OFF")
+
+    def set_winder_pwm(self, pwm_value):
+        self.send_data_to_arduino(f"SET_WINDER_PWM:{pwm_value}")
+
+    def close_connection(self):
+        if self.arduino:
+            self.arduino.close()
+            print("Closed serial connection.")
+
 
 ####################################################
 
-def create_string_vars():
-    global spool_motor_min_voltage_var, spool_motor_max_voltage_var
-    global cutter_motor_min_voltage_var, cutter_motor_max_voltage_var
-    global extra_plastics_motor_min_voltage_var, extra_plastics_motor_max_voltage_var
-    global plastics_cooling_motor_min_voltage_var, plastics_cooling_motor_max_voltage_var
+def update_temperature_label(event=None):
+    # Update the temperature label with the value from the entry
+    new_temperature = temperature_var.get()  # Get the current value from the entry
+    temp_var.set(f"Temperature: {new_temperature}°C")  # Update the label
 
-    spool_motor_min_voltage_var = tk.StringVar(value="0.00")
-    spool_motor_max_voltage_var = tk.StringVar(value="12.00")
-    cutter_motor_min_voltage_var = tk.StringVar(value="0.00")
-    cutter_motor_max_voltage_var = tk.StringVar(value="12.00")
-    extra_plastics_motor_min_voltage_var = tk.StringVar(value="0.00")
-    extra_plastics_motor_max_voltage_var = tk.StringVar(value="12.00")
-    plastics_cooling_motor_min_voltage_var = tk.StringVar(value="0.00")
-    plastics_cooling_motor_max_voltage_var = tk.StringVar(value="12.00")
+def create_string_vars():
+    global spool_motor_min_percentage_var, spool_motor_max_percentage_var
+    global cutter_motor_min_percentage_var, cutter_motor_max_percentage_var
+    global extra_plastics_motor_min_percentage_var, extra_plastics_motor_max_percentage_var
+    global plastics_cooling_motor_min_percentage_var, plastics_cooling_motor_max_percentage_var
+
+    spool_motor_min_percentage_var = tk.StringVar(value="20")  # Default min percentage
+    spool_motor_max_percentage_var = tk.StringVar(value="100")  # Default max percentage
+    cutter_motor_min_percentage_var = tk.StringVar(value="10")
+    cutter_motor_max_percentage_var = tk.StringVar(value="90")
+    extra_plastics_motor_min_percentage_var = tk.StringVar(value="15")
+    extra_plastics_motor_max_percentage_var = tk.StringVar(value="85")
+    plastics_cooling_motor_min_percentage_var = tk.StringVar(value="25")
+    plastics_cooling_motor_max_percentage_var = tk.StringVar(value="95")
+
+def update_voltage_wrapper(*args):
+    # Use a global variable or another method to reference your settings_window
+    global settings_window
+    update_voltage_range_labels_and_vars(settings_window)
 
 # Function to create labels for voltage range intervals
 def create_voltage_range_interval_labels(settings_window):
@@ -147,6 +262,8 @@ def update_voltage_range_labels_and_vars(settings_window):
         min_voltage = calculate_min_voltage(overall_speed_var.get())
         max_voltage = calculate_max_voltage(overall_speed_var.get())
 
+        global voltage_range_text
+
         # Now we set the complete voltage range text in the StringVars
         voltage_range_text = f"Allowed Voltage: {min_voltage:.2f} - {max_voltage:.2f} V"
         print(f"Setting voltage range to: {voltage_range_text}")  # Print the new voltage range
@@ -156,6 +273,8 @@ def update_voltage_range_labels_and_vars(settings_window):
         extra_plastics_motor_min_voltage_var.set(voltage_range_text)
         plastics_cooling_motor_min_voltage_var.set(voltage_range_text)
 
+        
+
         # Since we are using textvariable in the labels, we don't need to manually update them anymore.
         # However, if the GUI is not refreshing, we can force it to refresh:
         settings_window.update_idletasks()  # Processes pending tasks such as updates
@@ -164,31 +283,9 @@ def update_voltage_range_labels_and_vars(settings_window):
     except Exception as e:
         print(f"Error updating voltage ranges: {e}")
 
-# Function to calculate voltage based on speed percentage and overall speed
-def calculate_voltage(item, speed_percent, overall_speed_percent):
-    # Base voltage for CD drive motors assumed at 12V maximum
-    base_voltage = 12
-
-    # Define dynamic voltage ranges for different motors based on overall speed percent
-    # Adjusting the voltage calculation for CD drive motors
-    if item in ["Spool Motor", "Cutter Motor", "Extra Plastics Motor", "Plastics Cooling"]:
-        # Assuming CD drive motors operate safely at 70% of their rated voltage for longevity
-        safe_operation_percentage = 0.7
-        min_voltage = base_voltage * (overall_speed_percent / 100) * safe_operation_percentage
-        # Assuming no additional increment for CD drive motors as they operate at a fixed voltage
-        max_voltage = min_voltage
-    else:
-        # For other motors, existing logic can remain
-        min_voltage = base_voltage * (overall_speed_percent / 100) * 0.5
-        max_increment = 0.25
-        max_voltage = min_voltage + (base_voltage * max_increment)
-
-    # Ensure max voltage does not exceed base voltage
-    max_voltage = min(max_voltage, base_voltage)
-
-    # Calculate the actual voltage within this dynamic range
-    voltage = min_voltage + (max_voltage - min_voltage) * (speed_percent / 100)
-    return voltage
+def calculate_percentage(item, speed_percent, overall_speed_percent):
+    # Simplified to use the speed percent directly as an example
+    return speed_percent
 
 # Predictions for intervals for each motor
 # Assuming the overall speed is set as a percentage of the maximum
@@ -217,38 +314,30 @@ def update_voltage_output(scale, label):
     voltage_output = calculate_voltage_output(speed_percent)  # Implement this function
     label.config(text=f"Voltage Output: {voltage_output} V")
 
-# Function to calculate and update allowed voltage ranges for each motor
-def update_allowed_voltage_ranges(*args):
-    # Assuming different base voltage requirements for each motor based on their roles
-    base_voltages = {
-        'Spool Motor': 9.0,  # Example voltage, adjust based on your requirements
-        'Cutter Motor': 5.0,  # Example voltage, adjust based on your requirements
-        'Extra Plastics Motor': 6.0,  # Example voltage, adjust based on your requirements
-        'Plastics Cooling': 4.5  # Example voltage, adjust based on your requirements
-    }
+# Function to dynamically update PWM duty cycle settings based on operational conditions
+def update_motor_settings(*args):
+    overall_speed_percent = overall_speed_var.get()  # Get current overall speed as a percentage
 
-    # Assuming a dynamic range based on the percentage of maximum speed
-    for motor_name, base_voltage in base_voltages.items():
-        # Calculate min and max allowed voltages (for example, 80%-120% of base voltage)
-        min_voltage = base_voltage * 0.8
-        max_voltage = base_voltage * 1.2
+    # Calculate the new PWM duty cycles based on the overall speed
+    for motor_name, nominal_duty in default_pwm_settings.items():
+        # Example: Adjust the PWM duty by a factor derived from overall speed
+        # Here we scale the nominal duty cycle linearly with the overall speed
+        adjusted_pwm = nominal_duty * (overall_speed_percent / 100)  # Adjust duty cycle based on speed
 
-        # Update the labels with the calculated ranges
-        allowed_voltage_labels[motor_name].config(text=f"Allowed Voltage: {min_voltage:.2f} - {max_voltage:.2f} V")
+        # Update the GUI to show the allowed PWM duty cycle for each motor
+        allowed_percentage_labels[motor_name].config(text=f"Recommended Percent: {adjusted_pwm:.2f}%")
 
-
-# Helper function to create motor controls
+# Helper function to create motor controls and initialize labels for PWM display
 def create_motor_controls(motor_name, frame):
-     # Declare global variables at the beginning of the function
-    global spool_motor_voltage_label, spool_motor_min_voltage_entry, spool_motor_max_voltage_entry
-    global cutter_motor_voltage_label, cutter_motor_min_voltage_entry, cutter_motor_max_voltage_entry
-    global extra_plastics_motor_voltage_label, extra_plastics_motor_min_voltage_entry, extra_plastics_motor_max_voltage_entry
-    global plastics_cooling_motor_voltage_label, plastics_cooling_motor_min_voltage_entry, plastics_cooling_motor_max_voltage_entry
-
+    global spool_motor_percentage_label, spool_motor_min_percentage_var, spool_motor_max_percentage_var
+    global cutter_motor_percentage_label, cutter_motor_min_percentage_var, cutter_motor_max_percentage_var
+    global extra_plastics_motor_percentage_label, extra_plastics_motor_min_percentage_var, extra_plastics_motor_max_percentage_var
+    global plastics_cooling_motor_percentage_label, plastics_cooling_motor_min_percentage_var, plastics_cooling_motor_max_percentage_var
+    global allowed_percentage_labels
 
     # Create the variable for the entry before using it
-    min_voltage_var = StringVar(value="0")
-    max_voltage_var = StringVar(value="12")
+    min_percentage_var = StringVar(value="0")
+    max_percentage_var = StringVar(value="100")
 
     # Label for the motor speed scale
     scale_label = Label(frame, text=f"{motor_name} Speed (%)", bg="#333", fg="white")
@@ -258,54 +347,58 @@ def create_motor_controls(motor_name, frame):
     scale = Scale(frame, from_=0, to=100, orient='horizontal', bg="#ddd")
     scale.grid(row=0, column=1, padx=10, pady=5, sticky='ew')
 
-    # Create and store the allowed voltage label in the dictionary
-    allowed_voltage_labels[motor_name] = Label(frame, text="Allowed Voltage: -- V", bg="#333", fg="white")
-    allowed_voltage_labels[motor_name].grid(row=1, column=0, columnspan=4, padx=10, pady=5, sticky='w')
+    # Percentage output label
+    percentage_output_label = Label(frame, text="Recommended Percent: -- %", bg="#333", fg="white")
+    percentage_output_label.grid(row=1, column=0, columnspan=4, padx=10, pady=5, sticky='w')
 
-    # Voltage output label
-    voltage_output_label = Label(frame, text="Voltage Output: -- V", bg="#333", fg="white")
-    voltage_output_label.grid(row=0, column=4, padx=10, pady=5, sticky='w')
+    # Store the label in the dictionary for later access
+    allowed_percentage_labels[motor_name] = percentage_output_label
 
-    # Min Voltage Entry - Increase padx to move it further away
-    min_voltage_entry = Entry(frame, textvariable=min_voltage_var, width=6)
-    min_voltage_entry.grid(row=1, column=1, padx=(30, 0), pady=5, sticky='W')  # Increase the left padding
+    # Min and Max Percentage Entry
+    min_percentage_entry = Entry(frame, textvariable=min_percentage_var, width=6)
+    min_percentage_entry.grid(row=1, column=1, padx=(30, 0), pady=5, sticky='W')
+    max_percentage_entry = Entry(frame, textvariable=max_percentage_var, width=6)
+    max_percentage_entry.grid(row=1, column=2, padx=(5, 20), pady=5, sticky='W')
 
-    # Max Voltage Entry - Increase padx to move it further away
-    max_voltage_entry = Entry(frame, textvariable=max_voltage_var, width=6)
-    max_voltage_entry.grid(row=1, column=2, padx=(5, 20), pady=5, sticky='W')  # Increase the right padding
+    # Update the percentage range globals when entries change
+    min_percentage_var.trace_add("write", lambda *args: on_percentage_change(min_percentage_var, max_percentage_var, percentage_output_label))
+    max_percentage_var.trace_add("write", lambda *args: on_percentage_change(min_percentage_var, max_percentage_var, percentage_output_label))
 
-    if motor_name == "Spool Motor":
-        spool_motor_voltage_label = voltage_output_label
-        spool_motor_min_voltage_entry = min_voltage_entry
-        spool_motor_max_voltage_entry = max_voltage_entry
-    elif motor_name == "Cutter Motor":
-        cutter_motor_voltage_label = voltage_output_label
-        cutter_motor_min_voltage_entry = min_voltage_entry
-        cutter_motor_max_voltage_entry = max_voltage_entry
-    elif motor_name == "Extra Plastics Motor":
-        extra_plastics_motor_voltage_label = voltage_output_label
-        extra_plastics_motor_min_voltage_entry = min_voltage_entry
-        extra_plastics_motor_max_voltage_entry = max_voltage_entry
-    elif motor_name == "Plastics Cooling":
-        plastics_cooling_motor_voltage_label = voltage_output_label
-        plastics_cooling_motor_min_voltage_entry = min_voltage_entry
-        plastics_cooling_motor_max_voltage_entry = max_voltage_entry
+    return scale, percentage_output_label
 
-    # Update the voltage range globals when entries change
-    def on_voltage_change(*args):
-        try:
-            min_voltage = float(min_voltage_var.get())
-            max_voltage = float(max_voltage_var.get())
-            # Update the motor voltages and output labels accordingly
-            # ... Your existing logic here ...
-        except ValueError as e:
-            messagebox.showerror("Input Error", "Please enter valid numbers for voltage ranges.")
+def initialize_motor_controls():
+    global settings_window
+    if not settings_window:
+        settings_window = Toplevel(root, bg="#333")
+        settings_window.title("Motor Settings Initialization")
 
-    # Trace changes to update voltage range
-    min_voltage_var.trace_add("write", on_voltage_change)
-    max_voltage_var.trace_add("write", on_voltage_change)
+    spool_frame = ttk.Frame(settings_window, padding="3 3 12 12")
+    spool_frame.grid(row=0, column=0)
+    create_motor_controls("Spool Motor", spool_frame)
 
-    return scale, voltage_output_label, allowed_voltage_labels[motor_name]
+    cutter_frame = ttk.Frame(settings_window, padding="3 3 12 12")
+    cutter_frame.grid(row=1, column=0)
+    create_motor_controls("Cutter Motor", cutter_frame)
+
+    extra_plastics_frame = ttk.Frame(settings_window, padding="3 3 12 12")
+    extra_plastics_frame.grid(row=2, column=0)
+    create_motor_controls("Extra Plastics Motor", extra_plastics_frame)
+
+    plastics_cooling_frame = ttk.Frame(settings_window, padding="3 3 12 12")
+    plastics_cooling_frame.grid(row=3, column=0)
+    create_motor_controls("Plastics Cooling", plastics_cooling_frame)
+
+    # Optionally, hide this window or use it for debugging
+    settings_window.withdraw()  # Hide the window after initialization
+
+
+def on_percentage_change(min_var, max_var, label):
+    try:
+        min_percentage = float(min_var.get())
+        max_percentage = float(max_var.get())
+        label.config(text=f"Recommended Percent: {min_percentage} - {max_percentage}%")
+    except ValueError:
+        messagebox.showerror("Input Error", "Please enter valid numbers for percentage ranges.")
 
 def setup_com_port():
     if DEBUG_MODE:
@@ -329,66 +422,34 @@ def setup_com_port():
         return com_port, baud_rate
 
 def open_algorithm_settings():
-    # Use the global keyword to modify global variables inside a function
-    global spool_frame, cutter_frame, extra_frame, cooling_frame
+    global spool_frame, cooling_frame, settings_window
 
-    # Create the settings window first
+    # Create the settings window
     settings_window = Toplevel(root, bg="#333")
     settings_window.title("Algorithm Settings")
 
-    # Ensure that this line comes AFTER the motor control setup functions
-    create_voltage_range_interval_labels(settings_window)  # Assuming you are passing the correct argument
-
     # Explanation label
     explanation_label = Label(settings_window, text="Adjust settings for motor speeds and voltage ranges.", bg="#333", fg="white")
-    explanation_label.grid(row=0, column=0, columnspan=4, padx=10, pady=10)
+    explanation_label.grid(row=0, column=0, columnspan=2, padx=10, pady=10)
 
-    # Create frames for each set of controls with settings_window as their parent
+    # Create frames for spool and cooling motor controls
     spool_frame = ttk.Frame(settings_window, padding="3 3 12 12")
-    cutter_frame = ttk.Frame(settings_window, padding="3 3 12 12")
-    extra_frame = ttk.Frame(settings_window, padding="3 3 12 12")
     cooling_frame = ttk.Frame(settings_window, padding="3 3 12 12")
 
+    # Position the frames
     spool_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-    cutter_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-    extra_frame.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-    cooling_frame.grid(row=4, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    cooling_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
-    # Create the controls within each frame
-    spool_motor_controls = create_motor_controls("Spool Motor", spool_frame)
-    cutter_motor_controls = create_motor_controls("Cutter Motor", cutter_frame)
-    extra_plastics_motor_controls = create_motor_controls("Extra Plastics Motor", extra_frame)
-    plastics_cooling_motor_controls = create_motor_controls("Plastics Cooling", cooling_frame)
+    # Create controls within each frame
+    create_motor_controls("Spool Motor", spool_frame)
+    create_motor_controls("Plastics Cooling", cooling_frame)
 
-    # To this:
-    spool_motor_scale, _, spool_motor_interval_label = create_motor_controls("Spool Motor", spool_frame)
-    cutter_motor_scale, _, cutter_motor_interval_label = create_motor_controls("Cutter Motor", cutter_frame)
-    extra_plastics_motor_scale, _, extra_plastics_motor_interval_label = create_motor_controls("Extra Plastics Motor", extra_frame)
-    plastics_cooling_motor_scale, _, plastics_cooling_motor_interval_label = create_motor_controls("Plastics Cooling", cooling_frame)
-
-
-    # Place Apply Settings button in the settings window
-        # Style the "Apply Settings" button
+    # Apply settings button
     apply_button = Button(settings_window, text="Apply Settings", command=apply_settings,
-                          bg="#5cb85c", fg="white", relief='flat')  # Match the style of the open settings button
-    apply_button.grid(row=5, column=0, columnspan=4, padx=10, pady=10, sticky='ew')
+                          bg="#5cb85c", fg="white", relief='flat')
+    apply_button.grid(row=3, column=0, columnspan=2, padx=10, pady=10, sticky='ew')
 
-    # Make the settings window resizable
     settings_window.resizable(True, True)
-
-    # Call update_voltage_range_labels_and_vars with proper arguments
-    # You need to provide the minimum and maximum voltage values here
-    min_voltage = 0.00 # Replace with actual minimum voltage if available
-    max_voltage = 12.00 # Replace with actual maximum voltage if available
-
-    # Bind the overall speed variable to adjust the voltage ranges when it changes
-    overall_speed_var.trace('w', update_voltage_range_labels_and_vars)
-
-    update_voltage_range_labels_and_vars(min_voltage, max_voltage, settings_window)
-
-    
-    settings_window.columnconfigure(0, weight=1)  # This will ensure the frame resizes with the window
-    settings_window.rowconfigure(1, weight=1)  # This will allow the frame to expand vertically if needed
 
 def on_closing():
     if DEBUG_MODE:
@@ -408,37 +469,30 @@ def calculate_max_voltage(overall_speed):
     # Implement your logic to calculate the maximum voltage based on overall speed
     return overall_speed * 0.15  # Example calculation
 
-# Function to connect to the Arduino or simulate connection
-def connect_to_arduino(port, baud_rate):
-    if DEBUG_MODE:
-        print(f"Debug mode: Simulating connection to {port} at {baud_rate} baud")
-        return FakeSerial()
-    else:
-        try:
-            return serial.Serial(port, baud_rate)
-        except serial.SerialException as e:
-            messagebox.showerror("Connection Error", f"Could not connect to {port}: {e}")
-            return None
-
-# Function to send a command to the Arduino or simulate it
-def send_command(command):
-    if arduino:
-        arduino.write(f"{command}\n".encode())
-
 # Function to update the GUI with data from the Arduino or simulated data
 def update_gui():
     if DEBUG_MODE:
-        # Simulate Arduino data for debug purposes
-        temp_var.set("Temperature: 200\u00B0C (Debug)")
-        fan_speed_var.set("Fan Speed: 50% (Debug)")
-        motor_speed_var.set("Motor Speed: 100 steps/s (Debug)")
-        power_consumption_var.set("Power Consumption: 100W (Debug)")
+        # Current simulated temperature for debugging
+        current_temp = 200  # Example current temperature in degrees Celsius
+        target_temp = int(temperature_var.get())  # Get the target temperature from the entry
+
+        # Determine the direction of the arrow
+        if current_temp < target_temp:
+            arrow = "↑"  # Temperature needs to increase
+        elif current_temp > target_temp:
+            arrow = "↓"  # Temperature needs to decrease
+        else:
+            arrow = "—"  # Temperature is at target
+
+        # Update the temperature variable to include the arrow and target
+        temp_var.set(f"Temperature: {current_temp}°C {arrow} Target: {target_temp}°C (Debug)")
     else:
-        # Actual serial communication code would go here
+        # Actual serial communication code would go here for non-debug mode
         pass
 
     # Reschedule the update
     root.after(1000, update_gui)
+
 
 # Function to update motor voltage labels
 def update_motor_voltages():
@@ -489,16 +543,16 @@ def apply_settings():
     print(f"Extra Plastics Motor Voltage Range: {extra_plastics_motor_voltage_range}")
     print(f"Plastics Cooling Motor Voltage Range: {plastics_cooling_motor_voltage_range}")
 
-# Function to update the voltage ranges based on user input
-def update_voltage_ranges(*args):
-    global spool_motor_voltage_range, cutter_motor_voltage_range
-    global extra_plastics_motor_voltage_range, plastics_cooling_motor_voltage_range
+# Function to update the percentage ranges based on user input
+def update_percentage_ranges(*args):
+    global spool_motor_percentage_range, cutter_motor_percentage_range
+    global extra_plastics_motor_percentage_range, plastics_cooling_motor_percentage_range
 
-    # Update the voltage range for each motor
-    spool_motor_voltage_range = (float(spool_motor_min_voltage_entry.get()), float(spool_motor_max_voltage_entry.get()))
-    cutter_motor_voltage_range = (float(cutter_motor_min_voltage_entry.get()), float(cutter_motor_max_voltage_entry.get()))
-    extra_plastics_motor_voltage_range = (float(extra_plastics_motor_min_voltage_entry.get()), float(extra_plastics_motor_max_voltage_entry.get()))
-    plastics_cooling_motor_voltage_range = (float(plastics_cooling_motor_min_voltage_entry.get()), float(plastics_cooling_motor_max_voltage_entry.get()))
+    # Update the percentage range for each motor
+    spool_motor_percentage_range = (float(spool_motor_min_percentage_entry.get()), float(spool_motor_max_percentage_entry.get()))
+    cutter_motor_percentage_range = (float(cutter_motor_min_percentage_entry.get()), float(cutter_motor_max_percentage_entry.get()))
+    extra_plastics_motor_percentage_range = (float(extra_plastics_motor_min_percentage_entry.get()), float(extra_plastics_motor_max_percentage_entry.get()))
+    plastics_cooling_motor_percentage_range = (float(plastics_cooling_motor_min_percentage_entry.get()), float(plastics_cooling_motor_max_percentage_entry.get()))
 
 # Function to calculate voltage based on speed percentage and overall speed
 def calculate_voltage(item, speed_percent, overall_speed_percent):
@@ -541,10 +595,6 @@ def update_voltage_displays():
         fan_voltage = calculate_voltage("Fans", fan_max_temp_scale.get())  # Use the actual fan name
         motor_voltage_label.config(text=f"Motor Voltage: {motor_voltage:.2f}V")
         fan_voltage_label.config(text=f"Fan Voltage: {fan_voltage:.2f}V")
-
-def setup_trace():
-    # Trace changes in the overall speed variable
-    overall_speed_var.trace('w', update_voltage_range_labels_and_vars)
 
 # Function to handle image resizing
 def resize_image(event=None):
@@ -591,11 +641,15 @@ if __name__ == "__main__":
     root.configure(bg="#333")
     root.minsize(100, 100)  # Set a minimum size for the window
 
-    # Create frames within the root context
-    spool_frame = ttk.Frame(root, padding="3 3 12 12")
-    cutter_frame = ttk.Frame(root, padding="3 3 12 12")
-    extra_frame = ttk.Frame(root, padding="3 3 12 12")
-    cooling_frame = ttk.Frame(root, padding="3 3 12 12")
+    # Initialize Arduino Controller
+    arduino_controller = ArduinoController('COM3', 9600)  # Adjust COM port and baud rate as needed
+
+    # Initialize motor controls at the beginning of the program
+    initialize_motor_controls()
+
+    # Create frames for each set of controls with settings_window as their parent
+    spool_frame = ttk.Frame(settings_window, padding="3 3 12 12")
+    cooling_frame = ttk.Frame(settings_window, padding="3 3 12 12")
 
     # Now you can create StringVar instances
     spool_motor_min_voltage_var = tk.StringVar(root)
@@ -633,7 +687,6 @@ if __name__ == "__main__":
     root.bind('<Configure>', resize_image)
     root.after_idle(resize_image)
 
-
     ###
 
     # Call to create StringVars
@@ -641,12 +694,27 @@ if __name__ == "__main__":
 
     # Ensure overall_speed_var is declared at the beginning to be globally accessible
     overall_speed_var = tk.DoubleVar(value=50)
-    overall_speed_var.trace('w',  update_allowed_voltage_ranges)  # Trace variable changes
 
-    setup_trace()  # Setup additional traces if necessary
+    # Create StringVar for temperature input
+    temperature_var = StringVar(value="25")  # Default temperature set to 25 degrees
+    temperature_var.trace('w', lambda *args: update_gui())  # Add this line here
 
+    # Frame for temperature entry
+    temp_entry_frame = ttk.Frame(root, padding="3 3 12 12")
+    temp_entry_frame.pack(fill='x', padx=20, pady=5)
+    
+    # Label for temperature entry
+    temp_label = Label(temp_entry_frame, text="Enter Temperature (°C):", bg="#333", fg="white")
+    temp_label.pack(side='left', padx=(10, 2))
+    
+    # Entry for temperature
+    temp_entry = Entry(temp_entry_frame, textvariable=temperature_var, width=10)
+    temp_entry.pack(side='left', padx=(2, 10))
+
+    overall_speed_var.trace('w', update_motor_settings)  # Trace variable changes
+    
     # GUI elements setup
-    overall_speed_scale = Scale(root, from_=0, to=100, variable=overall_speed_var,
+    overall_speed_scale = Scale(root, from_=0, to 100, variable=overall_speed_var,
                                 label="Overall Speed (%)", orient='horizontal', bg="#ddd")
     overall_speed_scale.pack(fill='x', padx=20, pady=10)
 
@@ -667,22 +735,13 @@ if __name__ == "__main__":
     settings_button.pack(fill='x', padx=20, pady=10)
     calculate_intervals_based_on_diagram()
 
-
     # Bottom frame setup
     bottom_frame = tk.Frame(root, bg="#333")
     bottom_frame.pack(side='bottom', fill='x', padx=10, pady=5)
 
     # Motor controls setup
     create_motor_controls("Spool Motor", spool_frame)
-    create_motor_controls("Cutter Motor", cutter_frame)
-    create_motor_controls("Extra Plastics Motor", extra_frame)
     create_motor_controls("Plastics Cooling", cooling_frame)
-
-    # COM port and baud rate setup
-    com_port, baud_rate = setup_com_port()
-
-    # Connect to Arduino or simulate connection
-    arduino = connect_to_arduino(com_port, baud_rate)
 
     # Start the GUI update loop
     update_gui()
@@ -692,3 +751,4 @@ if __name__ == "__main__":
 
     # Start the Tkinter main loop
     root.mainloop()
+
