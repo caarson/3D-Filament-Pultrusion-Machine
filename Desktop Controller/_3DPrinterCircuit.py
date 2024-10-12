@@ -195,6 +195,10 @@ class ArduinoController:
             self.arduino.close()
             print("Closed serial connection.")
 
+    def save_settings(self):
+        self.send_data_to_arduino("SAVE_SETTINGS")
+
+
 
 ####################################################
 
@@ -714,7 +718,7 @@ if __name__ == "__main__":
     overall_speed_var.trace('w', update_motor_settings)  # Trace variable changes
     
     # GUI elements setup
-    overall_speed_scale = Scale(root, from_=0, to 100, variable=overall_speed_var,
+    overall_speed_scale = Scale(root, from_=0, to=100, variable=overall_speed_var,
                                 label="Overall Speed (%)", orient='horizontal', bg="#ddd")
     overall_speed_scale.pack(fill='x', padx=20, pady=10)
 
@@ -734,6 +738,10 @@ if __name__ == "__main__":
                              bg="#5cb85c", fg="white")
     settings_button.pack(fill='x', padx=20, pady=10)
     calculate_intervals_based_on_diagram()
+
+    # Save Settings Button
+    save_settings_button = Button(root, text="Save Settings", command=arduino_controller.save_settings, bg="#007bff", fg="white")
+    save_settings_button.pack(fill='x', padx=20, pady=10)
 
     # Bottom frame setup
     bottom_frame = tk.Frame(root, bg="#333")
