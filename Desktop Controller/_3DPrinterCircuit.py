@@ -15,7 +15,7 @@ logo_image_path = script_directory / "LosAngelesTechnologiesLogo.png"
 diagram_image_path = script_directory / "FilamentMaker.drawio (1).png"
 
 # Define DEBUG_MODE
-DEBUG_MODE = True  # Set to False in production
+DEBUG_MODE = False  # Set to False in production
 
 # Global variables for allowed voltage labels
 allowed_voltage_labels = {}
@@ -133,6 +133,16 @@ class ArduinoController:
         self.baud_rate = baud_rate
         self.arduino = self.connect_to_arduino()
 
+
+    def setup_connection(self):
+        self.port = simpledialog.askstring("COM Port", "Enter the COM port (e.g., COM3):", parent=root)
+        if not self.port:
+            messagebox.showerror("Connection Error", "No COM port provided. Exiting.")
+            root.destroy()
+            return
+
+        self.arduino = self.connect_to_arduino()
+
     def connect_to_arduino(self):
         if DEBUG_MODE:
             print(f"Debug mode: Simulating connection to {self.port} at {self.baud_rate} baud")
@@ -171,6 +181,18 @@ class ArduinoController:
         else:
             print("Arduino connection not established.")
             self.arduino = self.connect_to_arduino()
+
+    def update_temperature(self):
+        if self.arduino:
+            try:
+                if self.arduino.in_waiting:
+                    line = self.arduino.readline().decode('utf-8').strip()
+                    if line.startswith("Temp:"):
+                        temperature = line.split(":")[1].strip()
+                        self.temperature_var.set(f"Temperature: {temperature}°C")
+            except Exception as e:
+                print(f"Error reading from Arduino: {e}")
+        root.after(1000, self.update_temperature)  # Schedule to check every 1 second
 
     def fan_on(self):
         self.send_data_to_arduino("FAN_ON")
@@ -305,7 +327,7 @@ def calculate_intervals_based_on_diagram():
     extra_plastics_interval = (speed_percent * 0.04, speed_percent * 0.08)
     plastics_cooling_interval = (speed_percent * 0.06, speed_percent * 0.11)
 
-    # Update the global variables for voltage ranges with the predicted intervals
+    # Update the global variables for voltage ranages with the predicted intervals
     spool_motor_voltage_range = spool_interval
     cutter_motor_voltage_range = cutter_interval
     extra_plastics_motor_voltage_range = extra_plastics_interval
@@ -333,42 +355,34 @@ def update_motor_settings(*args):
 
 # Helper function to create motor controls and initialize labels for PWM display
 def create_motor_controls(motor_name, frame):
-    global spool_motor_percentage_label, spool_motor_min_percentage_var, spool_motor_max_percentage_var
-    global cutter_motor_percentage_label, cutter_motor_min_percentage_var, cutter_motor_max_percentage_var
-    global extra_plastics_motor_percentage_label, extra_plastics_motor_min_percentage_var, extra_plastics_motor_max_percentage_var
-    global plastics_cooling_motor_percentage_label, plastics_cooling_motor_min_percentage_var, plastics_cooling_motor_max_percentage_var
     global allowed_percentage_labels
 
-    # Create the variable for the entry before using it
-    min_percentage_var = StringVar(value="0")
-    max_percentage_var = StringVar(value="100")
+    min_percentage_var = tk.StringVar(value="0")
+    max_percentage_var = tk.StringVar(value="100")
 
-    # Label for the motor speed scale
-    scale_label = Label(frame, text=f"{motor_name} Speed (%)", bg="#333", fg="white")
+    scale_label = tk.Label(frame, text=f"{motor_name} Speed (%)", bg="#333", fg="white")
     scale_label.grid(row=0, column=0, padx=10, pady=5, sticky='w')
 
     # Motor speed scale
-    scale = Scale(frame, from_=0, to=100, orient='horizontal', bg="#ddd")
+    scale = tk.Scale(frame, from_=0, to=100, orient='horizontal', bg="#ddd", command=lambda value, name=motor_name: update_pwm_from_slider(name, int(value)))
     scale.grid(row=0, column=1, padx=10, pady=5, sticky='ew')
 
-    # Percentage output label
-    percentage_output_label = Label(frame, text="Recommended Percent: -- %", bg="#333", fg="white")
+    percentage_output_label = tk.Label(frame, text="Recommended Percent: -- %", bg="#333", fg="white")
     percentage_output_label.grid(row=1, column=0, columnspan=4, padx=10, pady=5, sticky='w')
-
-    # Store the label in the dictionary for later access
     allowed_percentage_labels[motor_name] = percentage_output_label
 
-    # Min and Max Percentage Entry
-    min_percentage_entry = Entry(frame, textvariable=min_percentage_var, width=6)
+    min_percentage_entry = tk.Entry(frame, textvariable=min_percentage_var, width=6)
     min_percentage_entry.grid(row=1, column=1, padx=(30, 0), pady=5, sticky='W')
-    max_percentage_entry = Entry(frame, textvariable=max_percentage_var, width=6)
+    max_percentage_entry = tk.Entry(frame, textvariable=max_percentage_var, width=6)
     max_percentage_entry.grid(row=1, column=2, padx=(5, 20), pady=5, sticky='W')
 
-    # Update the percentage range globals when entries change
-    min_percentage_var.trace_add("write", lambda *args: on_percentage_change(min_percentage_var, max_percentage_var, percentage_output_label))
-    max_percentage_var.trace_add("write", lambda *args: on_percentage_change(min_percentage_var, max_percentage_var, percentage_output_label))
-
     return scale, percentage_output_label
+
+def update_pwm_from_slider(motor_name, pwm_value):
+    # Adjust motor_name to match the command expected by Arduino, e.g., "FAN" or "WINDER"
+    arduino_name = "FAN" if "Cooling" in motor_name else "WINDER"
+    command = f"SET_{arduino_name}_PWM:{pwm_value}"
+    arduino_controller.send_data_to_arduino(command)
 
 def initialize_motor_controls():
     global settings_window
@@ -646,10 +660,17 @@ if __name__ == "__main__":
     root.minsize(100, 100)  # Set a minimum size for the window
 
     # Initialize Arduino Controller
-    arduino_controller = ArduinoController('COM3', 9600)  # Adjust COM port and baud rate as needed
+    arduino_controller = ArduinoController()  # Adjust COM port and baud rate as needed
+    arduino_controller.setup_connection()  # Set up the connection
+    if arduino_controller.arduino is None:
+        # If connection is not established, do not proceed
+        root.destroy()
+        sys.exit()
 
     # Initialize motor controls at the beginning of the program
     initialize_motor_controls()
+
+    arduino_controller.update_temperature()  # Start updating temperature from Arduino
 
     # Create frames for each set of controls with settings_window as their parent
     spool_frame = ttk.Frame(settings_window, padding="3 3 12 12")
