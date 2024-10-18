@@ -21,7 +21,7 @@ const int addrSetTemperature = 4;  // Address to store set temperature
 int setTemperature = 25;  // Default temperature in degrees Celsius
 
 // Initialize the thermistor object
-thermistor therm(thermistorPin, 10000, 3950, 25, 10000);  // Parameters must match your thermistor's specifications
+thermistor therm1(A0, 0); // A0 is the pin, and 0 is the sensor number according to your configuration
 
 void setup() {
   pinMode(fanPWM_Pin, OUTPUT);
@@ -35,17 +35,28 @@ void setup() {
 
   // Restore saved settings
   restoreSettings();
-  setTemperature = EEPROM.read(addrSetTemperature);
   playChime();  // Play a chime on startup to indicate power on
 }
 
 void loop() {
-  static unsigned long lastTempCheck = 0;
-  if (millis() - lastTempCheck > 1000) {  // Check temperature every second
-    lastTempCheck = millis();
-    float currentTemperature = therm.analog2temp();  // Read temperature from thermistor
+  static unsigned long lastUpdate = 0;
+  if (millis() - lastUpdate > 1000) {  // Update every second
+    lastUpdate = millis();
+    float currentTemperature = therm1.analog2temp();  // Read temperature from thermistor
+
+    // Assuming PWM values are representative of speed; otherwise, calculate as needed
+    int fanSpeed = analogRead(fanPWM_Pin);  // Read current speed of the fan
+    int winderSpeed = analogRead(winderMotorPWM_Pin);  // Read current speed of the winder motor
+
+    // Send temperature and speed data to the Python program
+    Serial.print("Temp:");
+    Serial.print(currentTemperature);
+    Serial.print(",FanSpeed:");
+    Serial.print(fanSpeed);
+    Serial.print(",WinderSpeed:");
+    Serial.println(winderSpeed);
+    
     controlTemperature(currentTemperature);
-    Serial.println("Current Temp: " + String(currentTemperature) + "C, Set Temp: " + String(setTemperature) + "C");
   }
 
   if (Serial.available() > 0) {
@@ -74,10 +85,13 @@ void handleCommands(String command) {
   }
 
   if (command.startsWith("SET_FAN_PWM:")) {
-    int pwmValue = command.substring(12).toInt();
-    analogWrite(fanPWM_Pin, pwmValue);
-    EEPROM.update(addrFanPWMValue, pwmValue);
-    Serial.println("Fan PWM set to " + String(pwmValue));
+      int guiPWMValue = command.substring(12).toInt();
+      int arduinoPWMValue = 255 - map(guiPWMValue, 0, 100, 0, 255);  // Correctly invert the scaling
+      analogWrite(fanPWM_Pin, arduinoPWMValue);
+      EEPROM.update(addrFanPWMValue, arduinoPWMValue);
+      Serial.print("Fan PWM set to ");
+      Serial.print(arduinoPWMValue);
+      Serial.println(" (inverted logic)");
   }
 
   if (command == "WINDER_ON") {
@@ -91,10 +105,13 @@ void handleCommands(String command) {
   }
 
   if (command.startsWith("SET_WINDER_PWM:")) {
-    int pwmValue = command.substring(15).toInt();
-    analogWrite(winderMotorPWM_Pin, pwmValue);
-    EEPROM.update(addrWinderMotorPWMValue, pwmValue);
-    Serial.println("Winder Motor PWM set to " + String(pwmValue));
+    int guiPWMValue = command.substring(15).toInt();
+    int arduinoPWMValue = 255 - map(guiPWMValue, 0, 100, 0, 255);  // Apply the same inverted logic to the winder
+    analogWrite(winderMotorPWM_Pin, arduinoPWMValue);
+    EEPROM.update(addrWinderMotorPWMValue, arduinoPWMValue);
+    Serial.print("Winder Motor PWM set to ");
+    Serial.print(arduinoPWMValue);
+    Serial.println(" (inverted logic)");
   }
 
   if (command.startsWith("SET_TEMP:")) {

@@ -470,13 +470,14 @@ def open_algorithm_settings():
     settings_window.resizable(True, True)
 
 def on_closing():
-    if DEBUG_MODE:
-        print("Closing the application (Debug Mode).")
-    else:
-        if arduino:
-            arduino.close()
-            print("Closed serial connection.")
-    root.destroy()
+    if messagebox.askokcancel("Quit", "Do you want to quit?"):
+        if DEBUG_MODE:
+            print("Closing the application (Debug Mode).")
+        else:
+            if arduino_controller.arduino:
+                arduino_controller.close_connection()
+                print("Closed serial connection.")
+        root.destroy()
 
 # Functions to calculate the min and max voltage
 def calculate_min_voltage(overall_speed):
