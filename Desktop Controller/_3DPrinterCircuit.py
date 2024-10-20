@@ -132,6 +132,7 @@ class ArduinoController:
         self.port = serial_port
         self.baud_rate = baud_rate
         self.arduino = self.connect_to_arduino()
+        self.buffer = ''  # Buffer to hold fragmentary serial data
 
 
     def setup_connection(self):
@@ -181,18 +182,41 @@ class ArduinoController:
         else:
             print("Arduino connection not established.")
             self.arduino = self.connect_to_arduino()
+    
+    def read_line(self):
+        """
+        Read data from the serial port and buffer it until a full line is received.
+        """
+        try:
+            while self.arduino.inWaiting() > 0:  # While there is data waiting to be read
+                char = self.arduino.read().decode('utf-8')  # Read one character at a time
+                if char == '\n':  # Check if it's the end of a line
+                    line = self.buffer
+                    self.buffer = ''  # Reset the buffer
+                    return line.strip()
+                else:
+                    self.buffer += char
+        except Exception as e:
+            print(f"Error reading from Arduino: {e}")
+        return None
 
     def update_temperature(self):
-        if self.arduino:
-            try:
-                if self.arduino.in_waiting:
-                    line = self.arduino.readline().decode('utf-8').strip()
-                    if line.startswith("Temp:"):
-                        temperature = line.split(":")[1].strip()
-                        self.temperature_var.set(f"Temperature: {temperature}°C")
-            except Exception as e:
-                print(f"Error reading from Arduino: {e}")
-        root.after(1000, self.update_temperature)  # Schedule to check every 1 second
+        line = self.read_line()
+        if line and "Temp:" in line:
+            temperature = line.split(':')[1]
+            return temperature
+
+    def update_fan_speed(self):
+        line = self.read_line()
+        if line and "FanSpeed:" in line:
+            fan_speed = line.split(':')[1]
+            return fan_speed
+
+    def update_motor_speed(self):
+        line = self.read_line()
+        if line and "MotorSpeed:" in line:
+            motor_speed = line.split(':')[1]
+            return motor_speed
 
     def fan_on(self):
         self.send_data_to_arduino("FAN_ON")
@@ -216,18 +240,84 @@ class ArduinoController:
         if self.arduino:
             self.arduino.close()
             print("Closed serial connection.")
+            
+    def set_temperature(self, temp_value):
+        command = f"SET_TEMP:{temp_value}"
+        self.send_data_to_arduino(command)  # Utilize the existing method to send data
 
     def save_settings(self):
         self.send_data_to_arduino("SAVE_SETTINGS")
 
+    def update_temperature_label(name, index, mode):
+        line = arduino_controller.read_line()
+        if line:
+            try:
+                temperature = float(line.split('Temp:')[1].split(',')[0])
+                fan_speed = int(line.split('FanSpeed:')[1].split(',')[0])
+                motor_speed = int(line.split('MotorSpeed:')[1])
+                
+                # Update temperature with the indicator
+                target_temperature = float(temperature_var.get())
+                if temperature < target_temperature:
+                    arrow = "↑"  # Temperature needs to increase
+                elif temperature > target_temperature:
+                    arrow = "↓"  # Temperature needs to decrease
+                else:
+                    arrow = "—"  # Temperature is stable
 
+                temp_var.set(f"Temperature: {temperature:.2f}°C {arrow}")
+                fan_speed_var.set(f"Fan Speed: {fan_speed}")
+                motor_speed_var.set(f"Motor Speed: {motor_speed}")
+            except ValueError:
+                # Handle possible conversion errors
+                print("Error parsing Arduino data:", line)
+        root.after(1000, lambda: update_temperature_label(name, index, mode))  # Schedule to rerun after 1000ms
 
-####################################################
+############################################################
 
-def update_temperature_label(event=None):
-    # Update the temperature label with the value from the entry
-    new_temperature = temperature_var.get()  # Get the current value from the entry
-    temp_var.set(f"Temperature: {new_temperature}°C")  # Update the label
+def update_fan_speed_label():
+    fan_speed = arduino_controller.update_fan_speed()
+    if fan_speed:
+        fan_speed_var.set(f"Fan Speed: {fan_speed}")
+    root.after(1000, update_fan_speed_label)
+
+def update_motor_speed_label():
+    motor_speed = arduino_controller.update_motor_speed()
+    if motor_speed:
+        motor_speed_var.set(f"Motor Speed: {motor_speed}")
+    root.after(1000, update_motor_speed_label)
+
+def send_set_temperature():
+    temp = temp_entry.get()  # Get the temperature value from the entry widget
+    if temp.isdigit():  # Check if the input is a valid number
+        arduino_controller.set_temperature(temp)  # Send temperature setting command to Arduino
+        print(f"Set temperature to: {temp}°C")  # Optional: Print the set temperature for verification
+    else:
+        messagebox.showerror("Error", "Please enter a valid number for temperature.")
+
+def update_temperature_label():
+    line = arduino_controller.read_line()
+    if line:
+        try:
+            # Parse the data from the Arduino
+            temp_data, fan_data, winder_data = line.split(',')
+            temperature = float(temp_data.split(':')[1])
+            fan_speed = int(fan_data.split(':')[1])
+            motor_speed = int(winder_data.split(':')[1].split('|')[0])
+
+            # Check against set temperature
+            target_temperature = float(temperature_var.get())
+            arrow = "↑" if temperature < target_temperature else ("↓" if temperature > target_temperature else "—")
+
+            # Update the UI elements
+            temp_var.set(f"Temperature: {temperature:.2f}°C {arrow}")
+            fan_speed_var.set(f"Fan Speed: {fan_speed}%")
+            motor_speed_var.set(f"Motor Speed: {motor_speed}%")
+        except ValueError as e:
+            print(f"Error parsing data: {e}")
+        except IndexError as e:
+            print(f"Parsing error - data may be incomplete: {e}")
+    root.after(1000, update_temperature_label)
 
 def create_string_vars():
     global spool_motor_min_percentage_var, spool_motor_max_percentage_var
@@ -723,7 +813,7 @@ if __name__ == "__main__":
 
     # Create StringVar for temperature input
     temperature_var = StringVar(value="25")  # Default temperature set to 25 degrees
-    temperature_var.trace('w', lambda *args: update_gui())  # Add this line here
+    temperature_var.trace('w', lambda name, index, mode: update_temperature_label())
 
     # Frame for temperature entry
     temp_entry_frame = ttk.Frame(root, padding="3 3 12 12")
@@ -736,6 +826,10 @@ if __name__ == "__main__":
     # Entry for temperature
     temp_entry = Entry(temp_entry_frame, textvariable=temperature_var, width=10)
     temp_entry.pack(side='left', padx=(2, 10))
+
+    # Add a button in your GUI to call this function
+    set_temp_button = Button(temp_entry_frame, text="Set Temperature", command=send_set_temperature)
+    set_temp_button.pack(side='right', padx=10)
 
     overall_speed_var.trace('w', update_motor_settings)  # Trace variable changes
     
@@ -778,6 +872,10 @@ if __name__ == "__main__":
 
     # Closing protocol setup
     root.protocol("WM_DELETE_WINDOW", on_closing)
+
+    update_temperature_label()  # Start the temperature updates
+    update_fan_speed_label()    # Start the fan speed updates
+    update_motor_speed_label()  # Start the motor speed updates
 
     # Start the Tkinter main loop
     root.mainloop()

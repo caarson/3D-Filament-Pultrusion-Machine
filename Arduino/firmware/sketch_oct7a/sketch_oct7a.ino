@@ -18,7 +18,7 @@ const int addrWinderMotorSwitchState = 2;
 const int addrWinderMotorPWMValue = 3;
 const int addrSetTemperature = 4;  // Address to store set temperature
 
-int setTemperature = 25;  // Default temperature in degrees Celsius
+int setTemperature = 10;  // Default temperature in degrees Celsius
 
 // Initialize the thermistor object
 thermistor therm1(A0, 0); // A0 is the pin, and 0 is the sensor number according to your configuration
@@ -52,9 +52,9 @@ void loop() {
     Serial.print("Temp:");
     Serial.print(currentTemperature);
     Serial.print(",FanSpeed:");
-    Serial.print(fanSpeed);
+    Serial.print(map(fanSpeed, 0, 255, 0, 100));  // Convert to percentage for consistency
     Serial.print(",WinderSpeed:");
-    Serial.println(winderSpeed);
+    Serial.println(map(winderSpeed, 0, 255, 0, 100));  // Convert to percentage for consistency
     
     controlTemperature(currentTemperature);
   }
@@ -65,13 +65,31 @@ void loop() {
   }
 }
 
+#define HYSTERESIS 2  // Degrees Celsius to prevent rapid toggling of SSR state
+
 void controlTemperature(float currentTemp) {
-  if (currentTemp < setTemperature) {
-    digitalWrite(ssrPin, HIGH);
-  } else {
-    digitalWrite(ssrPin, LOW);
+  static bool ssrEnabled = false;  // Track the state of the SSR
+
+  Serial.print("Current Temp: ");
+  Serial.print(currentTemp);
+  Serial.print(" | Set Temp: ");
+  Serial.print(setTemperature);
+  Serial.print(" | SSR State: ");
+  Serial.println(ssrEnabled ? "ON" : "OFF");
+
+  if (currentTemp < setTemperature - HYSTERESIS && !ssrEnabled) {
+    digitalWrite(ssrPin, HIGH);  // Turn on SSR
+    ssrEnabled = true;
+    Serial.println("SSR turned ON");
+  } else if (currentTemp > setTemperature + HYSTERESIS && ssrEnabled) {
+    digitalWrite(ssrPin, LOW);  // Turn off SSR
+    ssrEnabled = false;
+    Serial.println("SSR turned OFF");
   }
 }
+
+
+
 
 void handleCommands(String command) {
   if (command == "FAN_ON") {
