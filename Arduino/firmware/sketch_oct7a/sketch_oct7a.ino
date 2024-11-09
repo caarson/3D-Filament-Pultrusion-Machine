@@ -21,7 +21,10 @@ const int addrSetTemperature = 4;  // Address to store set temperature
 int setTemperature = 10;  // Default temperature in degrees Celsius
 
 // Initialize the thermistor object
-thermistor therm1(A0, 0); // A0 is the pin, and 0 is the sensor number according to your configuration
+thermistor therm1(A0, 0); // A0 is the pin, and 0 is the sensor number
+
+#define HYSTERESIS 2  // Degrees Celsius to prevent rapid toggling of SSR state
+#define UPDATE_INTERVAL 100  // Update interval in milliseconds
 
 void setup() {
   pinMode(fanPWM_Pin, OUTPUT);
@@ -35,47 +38,36 @@ void setup() {
 
   // Restore saved settings
   restoreSettings();
-  playChime();  // Play a chime on startup to indicate power on
+  playChime();  // Play a chime on startup
 }
 
 void loop() {
   static unsigned long lastUpdate = 0;
-  if (millis() - lastUpdate > 1000) {  // Update every second
+  if (millis() - lastUpdate >= UPDATE_INTERVAL) {
     lastUpdate = millis();
     float currentTemperature = therm1.analog2temp();  // Read temperature from thermistor
 
-    // Assuming PWM values are representative of speed; otherwise, calculate as needed
-    int fanSpeed = analogRead(fanPWM_Pin);  // Read current speed of the fan
-    int winderSpeed = analogRead(winderMotorPWM_Pin);  // Read current speed of the winder motor
-
-    // Send temperature and speed data to the Python program
-    Serial.print("Temp:");
+    // Print real-time temperature data to the Serial Monitor
+    Serial.print("Current Temperature: ");
     Serial.print(currentTemperature);
-    Serial.print(",FanSpeed:");
-    Serial.print(map(fanSpeed, 0, 255, 0, 100));  // Convert to percentage for consistency
-    Serial.print(",WinderSpeed:");
-    Serial.println(map(winderSpeed, 0, 255, 0, 100));  // Convert to percentage for consistency
-    
+    Serial.print(" °C | Set Temperature: ");
+    Serial.print(setTemperature);
+    Serial.print(" °C | SSR State: ");
+    Serial.println(digitalRead(ssrPin) ? "ON" : "OFF");
+
+    // Control temperature using the SSR
     controlTemperature(currentTemperature);
   }
 
+  // Check for incoming serial commands
   if (Serial.available() > 0) {
     String command = Serial.readStringUntil('\n');
     handleCommands(command);
   }
 }
 
-#define HYSTERESIS 2  // Degrees Celsius to prevent rapid toggling of SSR state
-
 void controlTemperature(float currentTemp) {
-  static bool ssrEnabled = false;  // Track the state of the SSR
-
-  Serial.print("Current Temp: ");
-  Serial.print(currentTemp);
-  Serial.print(" | Set Temp: ");
-  Serial.print(setTemperature);
-  Serial.print(" | SSR State: ");
-  Serial.println(ssrEnabled ? "ON" : "OFF");
+  static bool ssrEnabled = false;
 
   if (currentTemp < setTemperature - HYSTERESIS && !ssrEnabled) {
     digitalWrite(ssrPin, HIGH);  // Turn on SSR
@@ -87,9 +79,6 @@ void controlTemperature(float currentTemp) {
     Serial.println("SSR turned OFF");
   }
 }
-
-
-
 
 void handleCommands(String command) {
   if (command == "FAN_ON") {
@@ -103,13 +92,12 @@ void handleCommands(String command) {
   }
 
   if (command.startsWith("SET_FAN_PWM:")) {
-      int guiPWMValue = command.substring(12).toInt();
-      int arduinoPWMValue = 255 - map(guiPWMValue, 0, 100, 0, 255);  // Correctly invert the scaling
-      analogWrite(fanPWM_Pin, arduinoPWMValue);
-      EEPROM.update(addrFanPWMValue, arduinoPWMValue);
-      Serial.print("Fan PWM set to ");
-      Serial.print(arduinoPWMValue);
-      Serial.println(" (inverted logic)");
+    int guiPWMValue = command.substring(12).toInt();
+    int arduinoPWMValue = 255 - map(guiPWMValue, 0, 100, 0, 255);
+    analogWrite(fanPWM_Pin, arduinoPWMValue);
+    EEPROM.update(addrFanPWMValue, arduinoPWMValue);
+    Serial.print("Fan PWM set to ");
+    Serial.println(arduinoPWMValue);
   }
 
   if (command == "WINDER_ON") {
@@ -124,25 +112,26 @@ void handleCommands(String command) {
 
   if (command.startsWith("SET_WINDER_PWM:")) {
     int guiPWMValue = command.substring(15).toInt();
-    int arduinoPWMValue = 255 - map(guiPWMValue, 0, 100, 0, 255);  // Apply the same inverted logic to the winder
+    int arduinoPWMValue = 255 - map(guiPWMValue, 0, 100, 0, 255);
     analogWrite(winderMotorPWM_Pin, arduinoPWMValue);
     EEPROM.update(addrWinderMotorPWMValue, arduinoPWMValue);
     Serial.print("Winder Motor PWM set to ");
-    Serial.print(arduinoPWMValue);
-    Serial.println(" (inverted logic)");
+    Serial.println(arduinoPWMValue);
   }
 
   if (command.startsWith("SET_TEMP:")) {
     setTemperature = command.substring(9).toInt();
     EEPROM.update(addrSetTemperature, setTemperature);
-    Serial.println("Set Temperature updated to " + String(setTemperature) + "C");
+    Serial.print("Set Temperature updated to ");
+    Serial.print(setTemperature);
+    Serial.println(" °C");
   }
 }
 
 void playChime() {
   for (int i = 0; i < 100; i++) {
     digitalWrite(speakerPin, HIGH);
-    delayMicroseconds(500);  // 1 kHz tone
+    delayMicroseconds(500);
     digitalWrite(speakerPin, LOW);
     delayMicroseconds(500);
   }
