@@ -23,7 +23,7 @@ int setTemperature = 10;  // Default temperature in degrees Celsius
 // Initialize the thermistor object
 thermistor therm1(A0, 0); // A0 is the pin, and 0 is the sensor number
 
-#define HYSTERESIS 2  // Degrees Celsius to prevent rapid toggling of SSR state
+#define HYSTERESIS 1  // Degrees Celsius to prevent rapid toggling of SSR state
 #define UPDATE_INTERVAL 100  // Update interval in milliseconds
 
 void setup() {
