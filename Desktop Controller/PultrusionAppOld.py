@@ -3,6 +3,7 @@ import sys
 import serial
 import re
 import tkinter as tk
+from tkinter import *
 from tkinter import Label, Button, Entry, StringVar, ttk, messagebox, simpledialog
 from threading import Thread, Event
 
