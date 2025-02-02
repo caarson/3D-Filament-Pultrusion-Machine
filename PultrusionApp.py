@@ -38,9 +38,8 @@ BG_COLOR = "#2c2f33"
 FG_COLOR = "#ffffff"
 ACCENT_COLOR = "#7289da"
 
-def donothing(): # test command
-   x = 0
-
+def donothing():  # test command
+    pass
 
 # Serial Communication
 class ArduinoController:
@@ -56,7 +55,7 @@ class ArduinoController:
         try:
             self.arduino = serial.Serial(com_port, 9600, timeout=1)
             print(f"Connected to Arduino on {com_port} at 9600 baud")
-            time.sleep(2)
+            time.sleep(2)  # Wait for Arduino to initialize
         except serial.SerialException as e:
             messagebox.showerror("Serial Error", str(e))
             sys.exit()
@@ -65,6 +64,7 @@ class ArduinoController:
         if self.arduino and self.arduino.is_open:
             try:
                 self.arduino.write((command + '\r\n').encode('utf-8'))
+                print(f"Sent to Arduino: {command}")
             except Exception as e:
                 print(f"Error sending data: {e}")
 
@@ -90,6 +90,7 @@ arduino_controller = ArduinoController()
 # Helper Functions
 def handle_serial_data(data):
     try:
+        # Example data format: "Current Temperature: 25.5 C | Set Temperature: 100 C | SSR State: ON"
         match = re.search(r"Current Temperature:\s*([\d.]+)\s*C.*Set Temperature:\s*([\d.]+)\s*C.*SSR State:\s*(\w+)", data)
         if match:
             current_temp = match.group(1)
@@ -122,7 +123,7 @@ def setup_menu():
     helpmenu = Menu(menubar, tearoff=0)
     helpmenu.add_command(label="Set Timer", command=add_timer_controls)
     helpmenu.add_command(label="Strip Width", command=calculate_strip_width)
-    helpmenu.add_command(label="Save Widths", command=show_saved_widths)  # New menu option
+    helpmenu.add_command(label="Save Widths", command=show_saved_widths)
     helpmenu.add_command(label="About...", command=donothing)
     menubar.add_cascade(label="Help", menu=helpmenu)
 
@@ -139,7 +140,7 @@ def setup_menu():
 def set_filament_preset(filament_type, filament_presets):
     if filament_type in filament_presets:
         preset = filament_presets[filament_type]
-        desired_temp_var.set(preset["temperature"])
+        desired_temp_var.set(str(preset["temperature"]))
         fan_speed_var.set(preset["fan_speed"])
         spool_motor_speed_var.set(preset["spool_speed"])
         send_set_temperature()
@@ -179,16 +180,20 @@ def send_set_temperature():
         except ValueError:
             messagebox.showerror("Input Error", "Please enter a valid temperature.")
 
-    # Start a new thread for sending the command
     Thread(target=send_command_thread, daemon=True).start()
 
-def update_fan_speed(value):
+def update_fan_speed_display(value):
+    fan_speed = int(float(value))
+    fan_speed_text.set(f"Fan Speed: {fan_speed}%")
+    fan_speed_var.set(fan_speed)
     fan_speed_changed.set()
 
-def update_spool_motor_speed(value):
+def update_spool_motor_speed_display(value):
+    spool_speed = int(float(value))
+    spool_motor_speed_text.set(f"Spool Motor Speed: {spool_speed}%")
+    spool_motor_speed_var.set(spool_speed)
     spool_speed_changed.set()
 
-# Load saved widths on program start
 def load_saved_widths():
     if os.path.exists(SAVE_FILE):
         with open(SAVE_FILE, "r") as file:
@@ -196,39 +201,158 @@ def load_saved_widths():
                 name, width = line.strip().split(" : ")
                 saved_widths.append((name, float(width)))
 
-# Save new width to the file
 def save_width_to_file(name, width):
     with open(SAVE_FILE, "a") as file:
         file.write(f"{name} : {width:.2f}\n")
 
 def add_timer_controls():
-    def set_timer():
+    # This function can be used to add additional timer controls if needed
+    pass  # Placeholder for future extensions
+
+def calculate_strip_width():
+    def calculate():
         try:
-            timer = int(timer_entry.get())
-            messagebox.showinfo("Timer Set", f"Turning off after {timer} seconds.")
-            
-            # Timer logic to reset all to default values
-            def turn_off():
-                desired_temp_var.set("0")
-                fan_speed_var.set(0)
-                spool_motor_speed_var.set(0)
-                temp_var.set("Temperature: --\nDesired Temperature: 0°C")
-                fan_speed_text.set("Fan Speed: 0%")
-                spool_motor_speed_text.set("Spool Motor Speed: 0%")
+            thickness = float(thickness_entry.get())
+            name = name_entry.get().strip()
+            if not name:
+                result_label.config(text="Please enter a name for the strip.")
+                return
 
-            Thread(target=lambda: (time.sleep(timer), turn_off()), daemon=True).start()
+            # Example formula for width estimation
+            width = thickness * 2.5
+            result_label.config(text=f"Estimated Width: {width:.2f} mm")
+            return name, width
         except ValueError:
-            messagebox.showerror("Input Error", "Please enter a valid time in seconds.")
+            result_label.config(text="Please enter a valid thickness.")
 
-    timer_window = tk.Toplevel(root)
-    timer_window.title("Set Timer")
-    timer_window.geometry("300x200")
-    timer_window.configure(bg=BG_COLOR)
+    def save_width():
+        result = calculate()
+        if result:
+            name, width = result
+            saved_widths.append((name, width))
+            save_width_to_file(name, width)
+            result_label.config(text=f"Saved: {name} - {width:.2f} mm")
 
-    ttk.Label(timer_window, text="Enter Timer (seconds):", background=BG_COLOR, foreground=FG_COLOR).pack(pady=5)
-    timer_entry = ttk.Entry(timer_window)
-    timer_entry.pack(pady=5)
-    ttk.Button(timer_window, text="Set Timer", command=set_timer).pack(pady=10)
+    width_window = tk.Toplevel(root)
+    width_window.title("Calculate Strip Width")
+    width_window.geometry("400x350")
+    width_window.configure(bg=BG_COLOR)
+    
+    ttk.Label(width_window, text="Enter Strip Name:", background=BG_COLOR, foreground=FG_COLOR).pack(pady=5)
+    name_entry = ttk.Entry(width_window)
+    name_entry.pack(pady=5)
+    
+    ttk.Label(width_window, text="Enter Inner Thickness (mm):", background=BG_COLOR, foreground=FG_COLOR).pack(pady=5)
+    thickness_entry = ttk.Entry(width_window)
+    thickness_entry.pack(pady=5)
+    
+    ttk.Button(width_window, text="Calculate", command=calculate).pack(pady=5)
+    ttk.Button(width_window, text="Save", command=save_width).pack(pady=5)
+    
+    result_label = ttk.Label(width_window, text="", background=BG_COLOR, foreground=FG_COLOR)
+    result_label.pack(pady=10)
+
+def show_saved_widths():
+    save_window = tk.Toplevel(root)
+    save_window.title("Saved Widths")
+    save_window.geometry("400x300")
+    save_window.configure(bg=BG_COLOR)
+    
+    ttk.Label(save_window, text="Saved Widths:", background=BG_COLOR, foreground=FG_COLOR).pack(pady=10)
+    listbox = tk.Listbox(save_window, bg=BG_COLOR, fg=FG_COLOR)
+    listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+    
+    for name, width in saved_widths:
+        listbox.insert(tk.END, f"{name}: {width:.2f} mm")
+
+def debounce_fan_speed():
+    while not stop_threads:
+        fan_speed_changed.wait()
+        fan_speed_changed.clear()
+        time.sleep(0.2)  # Debounce delay
+        slider_value = int(fan_speed_var.get())
+        fan_speed_text.set(f"Fan Speed: {slider_value}%")
+        # Map slider value (0 slowest, 100 fastest) to PWM value: 100 -> 1 (fastest), 0 -> 255 (slowest)
+        pwm_value = int((100 - slider_value) / 100.0 * 254) + 1
+        arduino_controller.send_data_to_arduino(f"SET_FAN_PWM:{pwm_value}")
+
+def debounce_spool_speed():
+    while not stop_threads:
+        spool_speed_changed.wait()
+        spool_speed_changed.clear()
+        time.sleep(0.2)  # Debounce delay
+        spool_speed = int(spool_motor_speed_var.get())
+        spool_motor_speed_text.set(f"Spool Motor Speed: {spool_speed}%")
+        # Map spool slider value (0 slowest, 100 fastest) to PWM value: 100 -> 1 (fastest), 0 -> 255 (slowest)
+        winder_pwm = int((100 - spool_speed) / 100.0 * 254) + 1
+        arduino_controller.send_data_to_arduino(f"SET_WINDER_PWM:{winder_pwm}")
+
+def manual_fan_speed():
+    slider_value = int(fan_speed_var.get())
+    fan_speed_text.set(f"Fan Speed: {slider_value}%")
+    pwm_value = int((100 - slider_value) / 100.0 * 254) + 1
+    arduino_controller.send_data_to_arduino(f"SET_FAN_PWM:{pwm_value}")
+
+def manual_spool_speed():
+    spool_speed = int(spool_motor_speed_var.get())
+    spool_motor_speed_text.set(f"Spool Motor Speed: {spool_speed}%")
+    winder_pwm = int((100 - spool_speed) / 100.0 * 254) + 1
+    arduino_controller.send_data_to_arduino(f"SET_WINDER_PWM:{winder_pwm}")
+
+def on_closing():
+    global stop_threads
+    stop_threads = True
+    arduino_controller.close_connection()
+    root.destroy()
+
+def create_gui():
+    root.title("Filament Machine Control Interface")
+    root.geometry("800x700")
+    root.configure(bg=BG_COLOR)
+
+    filament_presets, menubar = setup_menu()
+    root.config(menu=menubar)
+
+    ttk.Label(root, textvariable=temp_var, background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 16)).place(relx=0.5, rely=0.05, anchor=tk.CENTER)
+    ttk.Entry(root, textvariable=desired_temp_var, width=10).place(relx=0.5, rely=0.1, anchor=tk.CENTER)
+    ttk.Button(root, text="Set Temperature", command=send_set_temperature).place(relx=0.5, rely=0.15, anchor=tk.CENTER)
+
+    # Fan Speed Controls
+    ttk.Label(root, textvariable=fan_speed_text, background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 14)).place(relx=0.5, rely=0.25, anchor=tk.CENTER)
+    ttk.Scale(root, from_=0, to=100, orient=tk.HORIZONTAL, variable=fan_speed_var, command=update_fan_speed_display, length=400).place(relx=0.5, rely=0.3, anchor=tk.CENTER)
+    ttk.Entry(root, textvariable=fan_speed_var, width=10).place(relx=0.5, rely=0.35, anchor=tk.CENTER)
+    ttk.Button(root, text="Set Fan Speed", command=manual_fan_speed).place(relx=0.5, rely=0.4, anchor=tk.CENTER)
+
+    # Spool Motor Speed Controls
+    ttk.Label(root, textvariable=spool_motor_speed_text, background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 14)).place(relx=0.5, rely=0.45, anchor=tk.CENTER)
+    ttk.Scale(root, from_=0, to=100, orient=tk.HORIZONTAL, variable=spool_motor_speed_var, command=update_spool_motor_speed_display, length=400).place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+    ttk.Entry(root, textvariable=spool_motor_speed_var, width=10).place(relx=0.5, rely=0.55, anchor=tk.CENTER)
+    ttk.Button(root, text="Set Spool Speed", command=manual_spool_speed).place(relx=0.5, rely=0.6, anchor=tk.CENTER)
+
+    # SSR State Display
+    ttk.Label(root, textvariable=ssr_state_var, background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 16)).place(relx=0.5, rely=0.65, anchor=tk.CENTER)
+
+    # Timer Components (Set Timer in Minutes)
+    ttk.Label(root, text="Set Timer (minutes):", background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 14)).place(relx=0.3, rely=0.75, anchor=tk.CENTER)
+    global timer_entry
+    timer_entry = ttk.Entry(root, width=10)
+    timer_entry.place(relx=0.5, rely=0.75, anchor=tk.CENTER)
+    ttk.Button(root, text="Start Timer", command=start_timer).place(relx=0.7, rely=0.75, anchor=tk.CENTER)
+
+    global countdown_label
+    countdown_label = ttk.Label(root, text="Time Remaining: 00:00", background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 14))
+    countdown_label.place(relx=0.5, rely=0.8, anchor=tk.CENTER)
+
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+
+def send_shutoff_time(shutoff_seconds):
+    try:
+        # Use the new command string "SET_SHUTDOWN_TIME:" as expected by the Arduino code.
+        command = f"SET_SHUTDOWN_TIME:{shutoff_seconds}"
+        arduino_controller.send_data_to_arduino(command)
+        print(f"Shutdown timer set for {shutoff_seconds} seconds.")
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to set shutdown timer: {e}")
 
 def start_timer():
     global timer_running, remaining_time
@@ -238,11 +362,11 @@ def start_timer():
 
     try:
         minutes = int(timer_entry.get())
-        remaining_time = minutes * 60
-        if remaining_time <= 0:
+        if minutes <= 0:
             raise ValueError
-
+        remaining_time = minutes * 60
         timer_running = True
+        send_shutoff_time(remaining_time)  # Send shutdown time in seconds to Arduino
         update_countdown()
         messagebox.showinfo("Timer Set", f"Turning off after {minutes} minute(s).")
     except ValueError:
@@ -270,146 +394,7 @@ def turn_off_all():
     spool_motor_speed_text.set("Spool Motor Speed: 0%")
     messagebox.showinfo("Timer Finished", "All systems have been turned off.")
 
-def calculate_strip_width():
-    def calculate():
-        try:
-            thickness = float(thickness_entry.get())
-            name = name_entry.get().strip()
-            if not name:
-                result_label.config(text="Please enter a name for the strip.")
-                return
-
-            # Example formula for width estimation
-            width = thickness * 2.5
-            result_label.config(text=f"Estimated Width: {width:.2f} mm")
-            return name, width
-        except ValueError:
-            result_label.config(text="Please enter a valid thickness.")
-
-    def save_width():
-        result = calculate()
-        if result:
-            name, width = result
-            # Save to global list and file
-            saved_widths.append((name, width))
-            save_width_to_file(name, width)
-            result_label.config(text=f"Saved: {name} - {width:.2f} mm")
-
-    # Create a new window
-    width_window = tk.Toplevel(root)
-    width_window.title("Calculate Strip Width")
-    width_window.geometry("400x350")
-    width_window.configure(bg=BG_COLOR)
-    
-    # Input for Name
-    ttk.Label(width_window, text="Enter Strip Name:", background=BG_COLOR, foreground=FG_COLOR).pack(pady=5)
-    name_entry = ttk.Entry(width_window)
-    name_entry.pack(pady=5)
-    
-    # Input for Thickness
-    ttk.Label(width_window, text="Enter Inner Thickness (mm):", background=BG_COLOR, foreground=FG_COLOR).pack(pady=5)
-    thickness_entry = ttk.Entry(width_window)
-    thickness_entry.pack(pady=5)
-    
-    # Calculate Button
-    ttk.Button(width_window, text="Calculate", command=calculate).pack(pady=5)
-
-    # Save Button
-    ttk.Button(width_window, text="Save", command=save_width).pack(pady=5)
-    
-    # Result label
-    result_label = ttk.Label(width_window, text="", background=BG_COLOR, foreground=FG_COLOR)
-    result_label.pack(pady=10)
-
-def show_saved_widths():
-    # Create a new window for saved widths
-    save_window = tk.Toplevel(root)
-    save_window.title("Saved Widths")
-    save_window.geometry("400x300")
-    save_window.configure(bg=BG_COLOR)
-    
-    # Display saved widths
-    ttk.Label(save_window, text="Saved Widths:", background=BG_COLOR, foreground=FG_COLOR).pack(pady=10)
-    listbox = tk.Listbox(save_window, bg=BG_COLOR, fg=FG_COLOR)
-    listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-    
-    for name, width in saved_widths:
-        listbox.insert(tk.END, f"{name}: {width:.2f} mm")
-
-
-def debounce_fan_speed():
-    while not stop_threads:
-        fan_speed_changed.wait()
-        fan_speed_changed.clear()
-        time.sleep(0.2)  # Debounce delay
-        fan_speed = int(fan_speed_var.get())
-        fan_speed_text.set(f"Fan Speed: {fan_speed}%")
-        arduino_controller.send_data_to_arduino(f"SET_FAN_PWM:{fan_speed}")
-
-def debounce_spool_speed():
-    while not stop_threads:
-        spool_speed_changed.wait()
-        spool_speed_changed.clear()
-        time.sleep(0.2)  # Debounce delay
-        spool_speed = int(spool_motor_speed_var.get())
-        spool_motor_speed_text.set(f"Spool Motor Speed: {spool_speed}%")
-        arduino_controller.send_data_to_arduino(f"SET_WINDER_PWM:{spool_speed}")
-
-def manual_fan_speed():
-    update_fan_speed(fan_speed_var.get())
-
-def manual_spool_speed():
-    update_spool_motor_speed(spool_motor_speed_var.get())
-
-def on_closing():
-    global stop_threads
-    stop_threads = True
-    arduino_controller.close_connection()
-    root.destroy()
-
-# GUI Setup
-def create_gui():
-    root.title("Filament Machine Control Interface")
-    root.geometry("800x600")
-    root.configure(bg=BG_COLOR)
-
-    filament_presets, menubar = setup_menu()
-    root.config(menu=menubar)
-
-    # Main GUI Components
-    ttk.Label(root, textvariable=temp_var, background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 16)).place(relx=0.5, rely=0.1, anchor=tk.CENTER)
-    Entry(root, textvariable=desired_temp_var, width=10).place(relx=0.5, rely=0.15, anchor=tk.CENTER)
-    Button(root, text="Set Temperature", command=send_set_temperature).place(relx=0.5, rely=0.2, anchor=tk.CENTER)
-
-    # Fan Speed Controls
-    ttk.Label(root, textvariable=fan_speed_text, background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 14)).place(relx=0.5, rely=0.3, anchor=tk.CENTER)
-    ttk.Scale(root, from_=0, to=100, orient=tk.HORIZONTAL, variable=fan_speed_var, command=update_fan_speed, length=400).place(relx=0.5, rely=0.35, anchor=tk.CENTER)
-    Entry(root, textvariable=fan_speed_var, width=10).place(relx=0.5, rely=0.4, anchor=tk.CENTER)
-    Button(root, text="Set Fan Speed", command=manual_fan_speed).place(relx=0.5, rely=0.45, anchor=tk.CENTER)
-
-    # Spool Motor Speed Controls
-    ttk.Label(root, textvariable=spool_motor_speed_text, background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 14)).place(relx=0.5, rely=0.55, anchor=tk.CENTER)
-    ttk.Scale(root, from_=0, to=100, orient=tk.HORIZONTAL, variable=spool_motor_speed_var, command=update_spool_motor_speed, length=400).place(relx=0.5, rely=0.6, anchor=tk.CENTER)
-    Entry(root, textvariable=spool_motor_speed_var, width=10).place(relx=0.5, rely=0.65, anchor=tk.CENTER)
-    Button(root, text="Set Spool Speed", command=manual_spool_speed).place(relx=0.5, rely=0.7, anchor=tk.CENTER)
-
-    ttk.Label(root, textvariable=ssr_state_var, background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 16)).place(relx=0.5, rely=0.8, anchor=tk.CENTER)
-
-    # Timer Components
-    ttk.Label(root, text="Set Timer (minutes):", background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 14)).place(relx=0.3, rely=0.85, anchor=tk.CENTER)
-    global timer_entry
-    timer_entry = ttk.Entry(root, width=10)
-    timer_entry.place(relx=0.5, rely=0.85, anchor=tk.CENTER)
-    Button(root, text="Start Timer", command=start_timer).place(relx=0.7, rely=0.85, anchor=tk.CENTER)
-
-    global countdown_label
-    countdown_label = ttk.Label(root, text="Time Remaining: 00:00", background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 14))
-    countdown_label.place(relx=0.5, rely=0.9, anchor=tk.CENTER)
-
-    root.protocol("WM_DELETE_WINDOW", on_closing)
-
 # Start GUI after COM Port Input
-# Load saved widths from the file at program start
 load_saved_widths()
 arduino_controller.setup_connection()
 create_gui()
