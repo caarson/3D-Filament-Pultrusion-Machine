@@ -182,6 +182,12 @@ def send_set_temperature():
 
     Thread(target=send_command_thread, daemon=True).start()
 
+def send_eject_command():
+    # This function sends the EJECT DEVICE command to the Arduino.
+    print("[DEBUG] Sending EJECT DEVICE command.")
+    arduino_controller.send_data_to_arduino("EJECT")
+    messagebox.showinfo("Eject Device", "EJECT DEVICE command sent to Arduino.")
+
 def update_fan_speed_display(value):
     fan_speed = int(float(value))
     fan_speed_text.set(f"Fan Speed: {fan_speed}%")
@@ -315,7 +321,9 @@ def create_gui():
 
     ttk.Label(root, textvariable=temp_var, background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 16)).place(relx=0.5, rely=0.05, anchor=tk.CENTER)
     ttk.Entry(root, textvariable=desired_temp_var, width=10).place(relx=0.5, rely=0.1, anchor=tk.CENTER)
-    ttk.Button(root, text="Set Temperature", command=send_set_temperature).place(relx=0.5, rely=0.15, anchor=tk.CENTER)
+    ttk.Button(root, text="Set Temperature", command=send_set_temperature).place(relx=0.35, rely=0.15, anchor=tk.CENTER)
+    # New Eject Device Button
+    ttk.Button(root, text="Eject Device", command=send_eject_command).place(relx=0.65, rely=0.15, anchor=tk.CENTER)
 
     # Fan Speed Controls
     ttk.Label(root, textvariable=fan_speed_text, background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 14)).place(relx=0.5, rely=0.25, anchor=tk.CENTER)

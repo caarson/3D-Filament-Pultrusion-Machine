@@ -12,33 +12,39 @@ const int speakerPin = 2;               // Speaker pin for auditory feedback
 const int thermistorPin = A0;           // Thermistor connected to analog pin A0
 const int inductiveSwitchPin = 6;       // Inductive switch for emergency stop
 
+// USB-detect pin (optional; for now, not used with the EJECT command)
+const int usbDetectPin = A1;
+
 // EEPROM addresses for each setting
 const int addrFanSwitchState = 0;
-const int addrFanPWMValue = 1;
+const int addrFanPWMValue    = 1;
 const int addrWinderMotorSwitchState = 2;
-const int addrWinderMotorPWMValue = 3;
-const int addrSetTemperature = 4;       // Address to store set temperature
+const int addrWinderMotorPWMValue    = 3;
+const int addrSetTemperature         = 4; // Address to store set temperature
 
-int setTemperature = 10;                // Default temperature (°C)
+int setTemperature;   // Read from EEPROM in restoreSettings()
 
-thermistor therm1(thermistorPin, 0);      // Initialize thermistor
+thermistor therm1(thermistorPin, 0);   // Initialize thermistor
 
-#define HYSTERESIS 1                    // °C hysteresis to prevent rapid toggling
-#define UPDATE_INTERVAL 100             // Update interval in milliseconds
+#define UPDATE_INTERVAL 100            // Update interval in milliseconds
 
 // Shutdown Timer Variables
-unsigned long shutoffTime = 0;          // In milliseconds
-unsigned long shutoffStartTime = 0;
-bool shutdownScheduled = false;
+unsigned long shutoffTime       = 0;
+unsigned long shutoffStartTime  = 0;
+bool shutdownScheduled          = false;
 
 // Cooling Mode Variables
-bool cooling = false;
-unsigned long coolingStartTime = 0;     // Used to delay turning the fan off
+bool cooling                    = false;
+unsigned long coolingStartTime  = 0;   // Delay turning fan off
 
-// New global flag to block further commands once shutdown is active
-bool shutdownActive = false;
+// Global flag to block further commands once shutdown is active
+bool shutdownActive             = false;
 
-const float SHUTOFF_TEMP_THRESHOLD = 35.0; // Temperature threshold in °C
+// Temperature threshold for cooling mode; when temperature drops below this value (30°C), fan will eventually turn off.
+const float SHUTOFF_TEMP_THRESHOLD = 30.0;
+
+// Variable to track USB connection state for debug prints
+bool usbWasPlugged = true;
 
 // Function Prototypes
 void controlTemperature(float currentTemp);
@@ -50,10 +56,10 @@ void playChime();
 void playShutdownChime();
 void restoreSettings();
 void clearEEPROM();
+void checkUSBState();
+
 
 // --- Helper functions for fan control ---
-// For your wiring, setting fanSwitch_Pin HIGH turns the fan on.
-// The PWM output on fanPWM_Pin controls the fan speed.
 void turnFanOn(uint8_t pwmValue) {
   digitalWrite(fanSwitch_Pin, HIGH);
   analogWrite(fanPWM_Pin, pwmValue);
@@ -80,24 +86,38 @@ void setup() {
   pinMode(ssrPin, OUTPUT);
   pinMode(speakerPin, OUTPUT);
   pinMode(thermistorPin, INPUT);
-  pinMode(inductiveSwitchPin, INPUT);  // Set inductive switch as input
+  pinMode(inductiveSwitchPin, INPUT);
+  pinMode(usbDetectPin, INPUT);  // USB detect input (optional)
 
-  Serial.begin(9600);  // Start serial communication for debugging
+  Serial.begin(9600);
+  delay(500);  // Allow some time for Serial to start
 
-  // Uncomment the following line to clear EEPROM if needed
+  Serial.println("\n=== System (Re)Started! ===");
+
+  // Uncomment this if you need to clear EEPROM once:
   // clearEEPROM();
 
-  // Restore saved settings and play startup chime
+  // Restore saved settings
   restoreSettings();
+
+  // Immediately check the temperature so that SSR is set appropriately
+  float startTemp = therm1.analog2temp();
+  Serial.print("Startup Temperature Reading: ");
+  Serial.print(startTemp);
+  Serial.println(" °C");
+  controlTemperature(startTemp);
+
   playChime();
 }
 
 void loop() {
-  // Check emergency stop button (inductive switch)
+  // Optional: Check USB state (if you have a proper USB detect circuit)
+  checkUSBState();
+
+  // Check emergency stop button
   if (digitalRead(inductiveSwitchPin) == HIGH) {
     Serial.println("Inductive Switch Pressed: Emergency Stop Activated!");
     emergencyStop();
-    // Wait until the switch is released to prevent multiple triggers.
     while (digitalRead(inductiveSwitchPin) == HIGH) {
       delay(100);
     }
@@ -106,7 +126,7 @@ void loop() {
   static unsigned long lastUpdate = 0;
   unsigned long currentMillis = millis();
 
-  // Update temperature and control SSR every UPDATE_INTERVAL milliseconds
+  // Temperature update every UPDATE_INTERVAL ms
   if (currentMillis - lastUpdate >= UPDATE_INTERVAL) {
     lastUpdate = currentMillis;
     float currentTemperature = therm1.analog2temp();
@@ -116,14 +136,15 @@ void loop() {
     Serial.print(setTemperature);
     Serial.print(" °C | SSR State: ");
     Serial.println(digitalRead(ssrPin) ? "ON" : "OFF");
+
     controlTemperature(currentTemperature);
   }
 
-  // Check if shutdown timer has elapsed (print countdown once per second)
+  // Shutdown timer (if set via command)
   if (shutdownScheduled) {
     unsigned long elapsed = currentMillis - shutoffStartTime;
     static unsigned long lastPrintTime = 0;
-    if (currentMillis - lastPrintTime >= 1000) {  // Print once per second
+    if (currentMillis - lastPrintTime >= 1000) {
       Serial.print("Shutdown countdown: ");
       Serial.print(elapsed);
       Serial.print(" ms elapsed (target: ");
@@ -141,8 +162,7 @@ void loop() {
     }
   }
 
-  // Cooling Mode: When cooling mode is active, the fan remains on (PWM = 1)
-  // until the temperature remains below the threshold for 10 continuous seconds.
+  // Cooling Mode: if active, wait until temperature is below threshold for 10 seconds before turning off the fan
   if (cooling) {
     float currentTemperature = therm1.analog2temp();
     if (currentTemperature < SHUTOFF_TEMP_THRESHOLD) {
@@ -154,52 +174,86 @@ void loop() {
         turnFanOff();
         cooling = false;
         coolingStartTime = 0;
-        beep();  // Indicate cooling complete
-        // Allow new commands after cooldown is complete.
+        beep();
         shutdownActive = false;
       }
     } else {
-      coolingStartTime = 0;  // Reset the timer if temperature rises
+      coolingStartTime = 0; // reset timer if temperature rises
     }
   }
 
-  // Process incoming serial commands only if shutdown is not active.
+  // Process serial commands (if any)
   if (!shutdownActive && Serial.available() > 0) {
     String command = Serial.readStringUntil('\n');
-    command.trim();
-    // Beep immediately for every received command
+    // Beep every time a command is received
     beep();
+    command.trim();
+    // Debug: print received command
+    Serial.print("Received command: ");
+    Serial.println(command);
+    // Handle the command (including EJECT below)
     handleCommands(command);
   }
 }
 
-void controlTemperature(float currentTemp) {
-  static bool ssrEnabled = false;
-  if (currentTemp < setTemperature - HYSTERESIS && !ssrEnabled) {
-    digitalWrite(ssrPin, HIGH);
-    ssrEnabled = true;
-    Serial.println("SSR turned ON");
-  } else if (currentTemp > setTemperature + HYSTERESIS && ssrEnabled) {
-    digitalWrite(ssrPin, LOW);
-    ssrEnabled = false;
-    Serial.println("SSR turned OFF");
-  }
+/**
+ * Checks the state of the USB detect pin.
+ * (If you have proper hardware, this could auto-adjust on disconnect.)
+ */
+void checkUSBState() {
+  // This function is left here for completeness.
+  // Without a dedicated USB detection circuit, its output might not be reliable.
+  bool usbNow = (digitalRead(usbDetectPin) == HIGH);
+  // (We don't adjust setTemperature automatically here if not using EJECT command.)
+  usbWasPlugged = usbNow;
 }
 
+/**
+ * Controls the heater (SSR) based on current temperature vs. setTemperature.
+ * No hysteresis is used so that even a 1°C difference causes a change.
+ */
+void controlTemperature(float currentTemp) {
+  bool heaterOn;
+  if (currentTemp < setTemperature) {
+    heaterOn = true;
+  } else {
+    heaterOn = false;
+  }
+  digitalWrite(ssrPin, heaterOn ? HIGH : LOW);
+}
+
+/**
+ * Handles incoming Serial commands.
+ */
 void handleCommands(String command) {
-  command.trim();  // Remove any extraneous whitespace
-  
-  // If shutdown is active, ignore further commands.
+  command.trim();
   if (shutdownActive) {
     Serial.println("Shutdown in progress: Command ignored.");
     return;
   }
-  
-  if (command == "FAN_ON") {
-    turnFanOn(255);  // Full speed when manually commanded.
-    Serial.println("FAN_ON command executed.");
+
+  // EJECT command: adjust the temperature target before disconnecting USB.
+  if (command.equalsIgnoreCase("EJECT")) {
+    Serial.println("DEBUG: EJECT command branch entered.");
+    int oldSetTemp = setTemperature;
+    // Adjust setTemperature 30° lower (so 60 becomes 30, for example)
+    if (setTemperature >= 30)
+      setTemperature -= 30;
+    else
+      setTemperature = 0;
+    Serial.print("EJECT command received. Adjusted setTemperature from ");
+    Serial.print(oldSetTemp);
+    Serial.print(" to ");
+    Serial.println(setTemperature);
+    EEPROM.update(addrSetTemperature, setTemperature);
+    beep();
+    return; // Exit after processing EJECT
   }
-  else if (command == "FAN_OFF") {
+
+  if (command == "FAN_ON") {
+    turnFanOn(255);
+    Serial.println("FAN_ON command executed.");
+  } else if (command == "FAN_OFF") {
     turnFanOff();
     Serial.println("FAN_OFF command executed.");
   }
@@ -207,26 +261,17 @@ void handleCommands(String command) {
   if (command.startsWith("SET_FAN_PWM:")) {
     int pwmValue = command.substring(12).toInt();
     pwmValue = constrain(pwmValue, 0, 255);
-    if (pwmValue > 0) {
-      digitalWrite(fanSwitch_Pin, HIGH);
-    } else {
-      digitalWrite(fanSwitch_Pin, LOW);
-    }
+    digitalWrite(fanSwitch_Pin, (pwmValue > 0) ? HIGH : LOW);
     analogWrite(fanPWM_Pin, pwmValue);
     EEPROM.update(addrFanPWMValue, pwmValue);
     Serial.print("Fan PWM set to ");
     Serial.println(pwmValue);
   }
 
-  // New command for setting winder PWM.
   if (command.startsWith("SET_WINDER_PWM:")) {
     int pwmValue = command.substring(15).toInt();
     pwmValue = constrain(pwmValue, 0, 255);
-    if (pwmValue > 0) {
-      digitalWrite(winderMotorSwitch_Pin, HIGH);
-    } else {
-      digitalWrite(winderMotorSwitch_Pin, LOW);
-    }
+    digitalWrite(winderMotorSwitch_Pin, (pwmValue > 0) ? HIGH : LOW);
     analogWrite(winderMotorPWM_Pin, pwmValue);
     EEPROM.update(addrWinderMotorPWMValue, pwmValue);
     Serial.print("Winder PWM set to ");
@@ -238,25 +283,23 @@ void handleCommands(String command) {
     analogWrite(winderMotorPWM_Pin, 255);
     EEPROM.update(addrWinderMotorSwitchState, HIGH);
     Serial.println("Winder Motor is ON");
-  }
-  else if (command == "WINDER_OFF") {
+  } else if (command == "WINDER_OFF") {
     digitalWrite(winderMotorSwitch_Pin, LOW);
     analogWrite(winderMotorPWM_Pin, 0);
     EEPROM.update(addrWinderMotorSwitchState, LOW);
     Serial.println("Winder Motor is OFF");
   }
 
-  // The shutdown command now only sets the timer.
   if (command.startsWith("SET_SHUTDOWN_TIME:")) {
     Serial.println("Received SET_SHUTDOWN_TIME");
     int colonIndex = command.indexOf(':');
     if (colonIndex != -1) {
       unsigned long userShutdownTime = command.substring(colonIndex + 1).toInt();
       if (userShutdownTime > 0) {
-        shutoffTime = userShutdownTime * 1000; // Convert seconds to milliseconds
+        shutoffTime = userShutdownTime * 1000UL;
         shutoffStartTime = millis();
         shutdownScheduled = true;
-        Serial.print("SET_SHUTDOWN_TIME command executed: Shutdown scheduled in ");
+        Serial.print("Shutdown scheduled in ");
         Serial.print(userShutdownTime);
         Serial.println(" seconds.");
       } else {
@@ -281,49 +324,47 @@ void handleCommands(String command) {
   }
 }
 
+/**
+ * Initiates the shutdown sequence.
+ * In addition to turning off the winder and activating cooling mode,
+ * this function also sets the setTemperature to 0 so that heating is turned off.
+ */
 void initiateShutdown() {
   Serial.println("Initiating shutdown sequence.");
-  // Block further commands.
-  shutdownActive = true;
-
-  // Set temperature to 0°C to turn off the heater.
+  
+  // Set target temperature to 0 (turn heater off)
   setTemperature = 0;
   EEPROM.update(addrSetTemperature, setTemperature);
-  Serial.println("Set Temperature set to 0°C to turn off heater.");
-
-  // Turn off the spool motor.
+  Serial.println("Set Temperature set to 0 °C.");
+  
+  shutdownActive = true;
   digitalWrite(winderMotorSwitch_Pin, LOW);
   analogWrite(winderMotorPWM_Pin, 0);
   Serial.println("Winder Motor turned OFF.");
-
-  // Turn off the heater.
-  digitalWrite(ssrPin, LOW);
-  Serial.println("Heater (SSR) turned OFF.");
-
-  // Turn on the fan in cooling mode: switch HIGH and PWM set to 1.
+  
+  // Turn on the fan at low speed for cooling mode
   digitalWrite(fanSwitch_Pin, HIGH);
   analogWrite(fanPWM_Pin, 1);
   EEPROM.update(addrFanSwitchState, HIGH);
   EEPROM.update(addrFanPWMValue, 1);
-  Serial.println("Fan turned ON in cooling mode with PWM set to 1.");
-
-  // Enter cooling mode.
+  Serial.println("Fan turned ON in cooling mode (PWM=1).");
+  
   cooling = true;
   playShutdownChime();
 }
 
+/**
+ * Performs an immediate emergency stop.
+ */
 void emergencyStop() {
   Serial.println("Emergency Stop Activated!");
-  // Immediately shut down all outputs.
   turnFanOff();
   digitalWrite(ssrPin, LOW);
   digitalWrite(winderMotorSwitch_Pin, LOW);
   analogWrite(winderMotorPWM_Pin, 0);
   EEPROM.update(addrWinderMotorPWMValue, 0);
-  // Cancel any scheduled shutdown or cooling mode.
   shutdownScheduled = false;
   cooling = false;
-  // Provide an audible alert for emergency stop.
   for (int i = 0; i < 3; i++) {
     for (int j = 0; j < 100; j++) {
       digitalWrite(speakerPin, HIGH);
@@ -335,6 +376,9 @@ void emergencyStop() {
   }
 }
 
+/**
+ * Beep sound for feedback.
+ */
 void beep() {
   for (int i = 0; i < 2; i++) {
     for (int j = 0; j < 100; j++) {
@@ -347,6 +391,9 @@ void beep() {
   }
 }
 
+/**
+ * Short startup chime.
+ */
 void playChime() {
   for (int i = 0; i < 100; i++) {
     digitalWrite(speakerPin, HIGH);
@@ -356,6 +403,9 @@ void playChime() {
   }
 }
 
+/**
+ * Longer shutdown chime.
+ */
 void playShutdownChime() {
   for (int i = 0; i < 200; i++) {
     digitalWrite(speakerPin, HIGH);
@@ -365,6 +415,9 @@ void playShutdownChime() {
   }
 }
 
+/**
+ * Restores settings from EEPROM.
+ */
 void restoreSettings() {
   int fanState = EEPROM.read(addrFanSwitchState);
   digitalWrite(fanSwitch_Pin, fanState);
@@ -376,14 +429,18 @@ void restoreSettings() {
   int winderMotorPWM = EEPROM.read(addrWinderMotorPWMValue);
   analogWrite(winderMotorPWM_Pin, winderMotorPWM);
 
-  setTemperature = EEPROM.read(addrSetTemperature);
-  if (setTemperature == 0xFF) {  // If EEPROM not set, default to 10°C
-    setTemperature = 10;
+  int readTemp = EEPROM.read(addrSetTemperature);
+  if (readTemp == 0xFF) { 
+    readTemp = 10;
   }
+  setTemperature = readTemp;
 
   Serial.println("Settings restored from EEPROM.");
 }
 
+/**
+ * Clears EEPROM (only call once if needed).
+ */
 void clearEEPROM() {
   EEPROM.write(addrFanSwitchState, LOW);
   EEPROM.write(addrFanPWMValue, 0);
