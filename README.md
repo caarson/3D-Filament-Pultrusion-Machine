@@ -21,3 +21,5 @@ Click the image below for a video of the machine in action!
 - **100A Solid State Relay (SSR)** (DC In, DC Out)
 - **12V (7 RPM) DC Motor**
 - **CR-10 Hotend Element**
+- Resistors (depending on your PWM controller and Hotend Element)
+- Capacitors (depending on your PWM controller)
