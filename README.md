@@ -9,7 +9,7 @@ Smart system controlled by an Arduino Pro Micro.
 - Fan and spool PWM control
 - Python-based computer control GUI
 
-![20241021_204338](https://github.com/user-attachments/assets/871f1c86-f08a-46e5-af2d-5ad3869d2c06)
+[![Video Preview](https://img.youtube.com/vi/6cM1gNl8eds/0.jpg)](https://www.youtube.com/shorts/6cM1gNl8eds)
 
 ### Parts List:
 - **Power Supply Unit (PSU)** (120W+) - (12V & 5V rails required)
