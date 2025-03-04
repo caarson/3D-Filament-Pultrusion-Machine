@@ -9,6 +9,8 @@ Smart system controlled by an Arduino Pro Micro.
 - Fan and spool PWM control
 - Python-based computer control GUI
 
+Click the image below for a video of the machine in action!
+
 [![Video Preview](https://img.youtube.com/vi/6cM1gNl8eds/0.jpg)](https://www.youtube.com/shorts/6cM1gNl8eds)
 
 ### Parts List:
