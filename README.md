@@ -1,10 +1,13 @@
 # PET Filament Pull-trusion Instrument
-Machine built to process plastic strips from plastic bottles. Smart system controlled by Arduino Pro Micro. 
+Machine built to process plastic strips from plastic bottles. 
+Smart system controlled by Arduino Pro Micro. 
+Features: auto-shutoff feature, precise temperature and fan and spool PWM control, and Python-based computer control GUI.
+
 
 ![20241021_204338](https://github.com/user-attachments/assets/871f1c86-f08a-46e5-af2d-5ad3869d2c06)
 
 # Parts List
-PSU (120W+) - (12V & 5V rails required)\n
+PSU (120W+) - (12V & 5V rails required)
 DC-DC Adjustable Step Up Module Board 3 5 12V to 19 24 30 36V Boost Converter
 2 x PWM Motor Speed Controller 2A Low Voltage DC LED Dimmer 1.8v 3v 5v 6v 12v
 Arduino Pro Micro
