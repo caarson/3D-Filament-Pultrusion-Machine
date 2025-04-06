@@ -5,19 +5,30 @@ import serial
 import re
 import tkinter as tk
 from tkinter import *
-from tkinter import Label, Button, Entry, StringVar, ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox, simpledialog
 from threading import Thread, Event
 
+# -------------------------------------------------
+# Global UI/Style Settings (Windows 11–inspired)
+# -------------------------------------------------
+BG_COLOR = "#f3f3f3"       # Light background
+FG_COLOR = "#333333"       # Dark gray text
+ACCENT_COLOR = "#0078D7"   # Microsoft blue accent
+DEFAULT_FONT = ("Segoe UI", 12)
+TITLE_FONT = ("Segoe UI", 16)
+
+# -------------------------------------------------
 # Global Variables
+# -------------------------------------------------
 root = tk.Tk()
-temperature_var = StringVar(root, value="25")
-desired_temp_var = StringVar(root, value="100")
-temp_var = StringVar(root, value="Temperature: --\nDesired Temperature: --")
+temperature_var = tk.StringVar(root, value="25")
+desired_temp_var = tk.StringVar(root, value="100")
+temp_var = tk.StringVar(root, value="Temperature: 0.00°C\nDesired Temperature: 0°C")
 fan_speed_var = tk.IntVar(root, value=50)
 spool_motor_speed_var = tk.IntVar(root, value=50)
-fan_speed_text = StringVar(root, value="Fan Speed: 50%")
-spool_motor_speed_text = StringVar(root, value="Spool Motor Speed: 50%")
-ssr_state_var = StringVar(root, value="SSR State: OFF")
+fan_speed_text = tk.StringVar(root, value="Fan Speed: 0%")
+spool_motor_speed_text = tk.StringVar(root, value="Spool Motor Speed: 50%")
+ssr_state_var = tk.StringVar(root, value="SSR State: OFF")
 serial_buffer = ""
 last_set_temperature = None
 stop_threads = False
@@ -34,14 +45,28 @@ SAVE_FILE = "strip_widths.txt"  # File to store the saved widths
 fan_speed_changed = Event()
 spool_speed_changed = Event()
 
-BG_COLOR = "#2c2f33"
-FG_COLOR = "#ffffff"
-ACCENT_COLOR = "#7289da"
+# -------------------------------------------------
+# Setup ttk Styles for a Modern Look
+# -------------------------------------------------
+def setup_styles():
+    style = ttk.Style()
+    style.theme_use('clam')
+    # General widget styles
+    style.configure("TLabel", background=BG_COLOR, foreground=FG_COLOR, font=DEFAULT_FONT, padding=5)
+    style.configure("TButton", font=DEFAULT_FONT, padding=6)
+    style.map("TButton",
+              background=[('active', ACCENT_COLOR)],
+              foreground=[('active', "#ffffff")])
+    style.configure("TEntry", font=DEFAULT_FONT, padding=4)
+    style.configure("Horizontal.TScale", background=BG_COLOR)
+    style.configure("TFrame", background=BG_COLOR)
 
-def donothing():  # test command
+def donothing():
     pass
 
+# -------------------------------------------------
 # Serial Communication
+# -------------------------------------------------
 class ArduinoController:
     def __init__(self):
         self.arduino = None
@@ -87,16 +112,20 @@ class ArduinoController:
 
 arduino_controller = ArduinoController()
 
+# -------------------------------------------------
 # Helper Functions
+# -------------------------------------------------
 def handle_serial_data(data):
+    """
+    Expected data format example:
+    "Current Temperature: 25.5 C | Set Temperature: 100 C | SSR State: ON"
+    """
     try:
-        # Example data format: "Current Temperature: 25.5 C | Set Temperature: 100 C | SSR State: ON"
         match = re.search(r"Current Temperature:\s*([\d.]+)\s*C.*Set Temperature:\s*([\d.]+)\s*C.*SSR State:\s*(\w+)", data)
         if match:
             current_temp = match.group(1)
             set_temp = match.group(2)
             ssr_state = match.group(3)
-
             temp_var.set(f"Temperature: {current_temp}°C\nDesired Temperature: {set_temp}°C")
             ssr_state_var.set(f"SSR State: {ssr_state}")
     except Exception as e:
@@ -108,34 +137,6 @@ def read_serial_data():
         if data:
             handle_serial_data(data)
         time.sleep(0.1)
-
-def setup_menu():
-    # Menu setup
-    menubar = Menu(root)
-    filemenu = Menu(menubar, tearoff=0)
-    filemenu.add_command(label="New", command=donothing)
-    filemenu.add_command(label="Open", command=donothing)
-    filemenu.add_command(label="Save", command=donothing)
-    filemenu.add_separator()
-    filemenu.add_command(label="Exit", command=root.quit)
-    menubar.add_cascade(label="File", menu=filemenu)
-
-    helpmenu = Menu(menubar, tearoff=0)
-    helpmenu.add_command(label="Set Timer", command=add_timer_controls)
-    helpmenu.add_command(label="Strip Width", command=calculate_strip_width)
-    helpmenu.add_command(label="Save Widths", command=show_saved_widths)
-    helpmenu.add_command(label="About...", command=donothing)
-    menubar.add_cascade(label="Help", menu=helpmenu)
-
-    # Filament Presets
-    filament_presets = {
-        "PLA": {"temperature": 190, "fan_speed": 60, "spool_speed": 70},
-        "ABS": {"temperature": 230, "fan_speed": 75, "spool_speed": 80},
-        "PETG": {"temperature": 250, "fan_speed": 50, "spool_speed": 60},
-        "Nylon": {"temperature": 260, "fan_speed": 70, "spool_speed": 65}
-    }
-
-    return filament_presets, menubar
 
 def set_filament_preset(filament_type, filament_presets):
     if filament_type in filament_presets:
@@ -153,16 +154,15 @@ def send_set_temperature():
         global last_set_temperature
         try:
             temp_value = int(desired_temp_var.get())
-            
             # Allow temperature to be updated even if it's the same value
             if temp_value != last_set_temperature:
                 print(f"[DEBUG] Sending SET_TEMP command with value: {temp_value}")
                 arduino_controller.send_data_to_arduino(f"SET_TEMP:{temp_value}")
                 last_set_temperature = temp_value
 
-                # Wait for acknowledgment without blocking the main thread
+                # Wait for acknowledgment (up to 5 seconds)
                 start_time = time.time()
-                while time.time() - start_time < 5:  # Wait up to 5 seconds for acknowledgment
+                while time.time() - start_time < 5:
                     response = arduino_controller.read_data_from_arduino()
                     if response and f"Set Temperature updated to {temp_value}" in response:
                         print(f"[DEBUG] Received acknowledgment: {response}")
@@ -170,10 +170,8 @@ def send_set_temperature():
                         return
                     time.sleep(0.1)
 
-                # If no acknowledgment, reset last_set_temperature to None
                 print("[WARNING] No acknowledgment received from Arduino.")
                 last_set_temperature = None
-
             else:
                 print(f"[DEBUG] Desired temperature {temp_value}°C is already set. No command sent.")
 
@@ -183,7 +181,7 @@ def send_set_temperature():
     Thread(target=send_command_thread, daemon=True).start()
 
 def send_eject_command():
-    # This function sends the EJECT DEVICE command to the Arduino.
+    # Sends the EJECT DEVICE command to the Arduino.
     print("[DEBUG] Sending EJECT DEVICE command.")
     arduino_controller.send_data_to_arduino("EJECT")
     messagebox.showinfo("Eject Device", "EJECT DEVICE command sent to Arduino.")
@@ -200,6 +198,18 @@ def update_spool_motor_speed_display(value):
     spool_motor_speed_var.set(spool_speed)
     spool_speed_changed.set()
 
+def manual_fan_speed():
+    slider_value = int(fan_speed_var.get())
+    fan_speed_text.set(f"Fan Speed: {slider_value}%")
+    pwm_value = int((100 - slider_value) / 100.0 * 254) + 1
+    arduino_controller.send_data_to_arduino(f"SET_FAN_PWM:{pwm_value}")
+
+def manual_spool_speed():
+    spool_speed = int(spool_motor_speed_var.get())
+    spool_motor_speed_text.set(f"Spool Motor Speed: {spool_speed}%")
+    winder_pwm = int((100 - spool_speed) / 100.0 * 254) + 1
+    arduino_controller.send_data_to_arduino(f"SET_WINDER_PWM:{winder_pwm}")
+
 def load_saved_widths():
     if os.path.exists(SAVE_FILE):
         with open(SAVE_FILE, "r") as file:
@@ -210,10 +220,6 @@ def load_saved_widths():
 def save_width_to_file(name, width):
     with open(SAVE_FILE, "a") as file:
         file.write(f"{name} : {width:.2f}\n")
-
-def add_timer_controls():
-    # This function can be used to add additional timer controls if needed
-    pass  # Placeholder for future extensions
 
 def calculate_strip_width():
     def calculate():
@@ -243,19 +249,19 @@ def calculate_strip_width():
     width_window.title("Calculate Strip Width")
     width_window.geometry("400x350")
     width_window.configure(bg=BG_COLOR)
-    
-    ttk.Label(width_window, text="Enter Strip Name:", background=BG_COLOR, foreground=FG_COLOR).pack(pady=5)
+
+    ttk.Label(width_window, text="Enter Strip Name:").pack(pady=5)
     name_entry = ttk.Entry(width_window)
     name_entry.pack(pady=5)
-    
-    ttk.Label(width_window, text="Enter Inner Thickness (mm):", background=BG_COLOR, foreground=FG_COLOR).pack(pady=5)
+
+    ttk.Label(width_window, text="Enter Inner Thickness (mm):").pack(pady=5)
     thickness_entry = ttk.Entry(width_window)
     thickness_entry.pack(pady=5)
-    
+
     ttk.Button(width_window, text="Calculate", command=calculate).pack(pady=5)
     ttk.Button(width_window, text="Save", command=save_width).pack(pady=5)
-    
-    result_label = ttk.Label(width_window, text="", background=BG_COLOR, foreground=FG_COLOR)
+
+    result_label = ttk.Label(width_window, text="")
     result_label.pack(pady=10)
 
 def show_saved_widths():
@@ -263,13 +269,23 @@ def show_saved_widths():
     save_window.title("Saved Widths")
     save_window.geometry("400x300")
     save_window.configure(bg=BG_COLOR)
-    
-    ttk.Label(save_window, text="Saved Widths:", background=BG_COLOR, foreground=FG_COLOR).pack(pady=10)
-    listbox = tk.Listbox(save_window, bg=BG_COLOR, fg=FG_COLOR)
+
+    ttk.Label(save_window, text="Saved Widths:").pack(pady=10)
+    listbox = tk.Listbox(save_window, bg=BG_COLOR, fg=FG_COLOR, bd=0, highlightthickness=0, font=DEFAULT_FONT)
     listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-    
+
     for name, width in saved_widths:
         listbox.insert(tk.END, f"{name}: {width:.2f} mm")
+
+def add_timer_controls():
+    # Placeholder for adding additional timer controls if needed
+    pass
+
+def on_closing():
+    global stop_threads
+    stop_threads = True
+    arduino_controller.close_connection()
+    root.destroy()
 
 def debounce_fan_speed():
     while not stop_threads:
@@ -278,7 +294,7 @@ def debounce_fan_speed():
         time.sleep(0.2)  # Debounce delay
         slider_value = int(fan_speed_var.get())
         fan_speed_text.set(f"Fan Speed: {slider_value}%")
-        # Map slider value (0 slowest, 100 fastest) to PWM value: 100 -> 1 (fastest), 0 -> 255 (slowest)
+        # Map slider value (0 slowest, 100 fastest) to PWM value
         pwm_value = int((100 - slider_value) / 100.0 * 254) + 1
         arduino_controller.send_data_to_arduino(f"SET_FAN_PWM:{pwm_value}")
 
@@ -289,70 +305,13 @@ def debounce_spool_speed():
         time.sleep(0.2)  # Debounce delay
         spool_speed = int(spool_motor_speed_var.get())
         spool_motor_speed_text.set(f"Spool Motor Speed: {spool_speed}%")
-        # Map spool slider value (0 slowest, 100 fastest) to PWM value: 100 -> 1 (fastest), 0 -> 255 (slowest)
+        # Map spool slider value (0 slowest, 100 fastest) to PWM value
         winder_pwm = int((100 - spool_speed) / 100.0 * 254) + 1
         arduino_controller.send_data_to_arduino(f"SET_WINDER_PWM:{winder_pwm}")
 
-def manual_fan_speed():
-    slider_value = int(fan_speed_var.get())
-    fan_speed_text.set(f"Fan Speed: {slider_value}%")
-    pwm_value = int((100 - slider_value) / 100.0 * 254) + 1
-    arduino_controller.send_data_to_arduino(f"SET_FAN_PWM:{pwm_value}")
-
-def manual_spool_speed():
-    spool_speed = int(spool_motor_speed_var.get())
-    spool_motor_speed_text.set(f"Spool Motor Speed: {spool_speed}%")
-    winder_pwm = int((100 - spool_speed) / 100.0 * 254) + 1
-    arduino_controller.send_data_to_arduino(f"SET_WINDER_PWM:{winder_pwm}")
-
-def on_closing():
-    global stop_threads
-    stop_threads = True
-    arduino_controller.close_connection()
-    root.destroy()
-
-def create_gui():
-    root.title("Filament Machine Control Interface")
-    root.geometry("800x700")
-    root.configure(bg=BG_COLOR)
-
-    filament_presets, menubar = setup_menu()
-    root.config(menu=menubar)
-
-    ttk.Label(root, textvariable=temp_var, background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 16)).place(relx=0.5, rely=0.05, anchor=tk.CENTER)
-    ttk.Entry(root, textvariable=desired_temp_var, width=10).place(relx=0.5, rely=0.1, anchor=tk.CENTER)
-    ttk.Button(root, text="Set Temperature", command=send_set_temperature).place(relx=0.35, rely=0.15, anchor=tk.CENTER)
-    # New Eject Device Button
-    ttk.Button(root, text="Eject Device", command=send_eject_command).place(relx=0.65, rely=0.15, anchor=tk.CENTER)
-
-    # Fan Speed Controls
-    ttk.Label(root, textvariable=fan_speed_text, background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 14)).place(relx=0.5, rely=0.25, anchor=tk.CENTER)
-    ttk.Scale(root, from_=0, to=100, orient=tk.HORIZONTAL, variable=fan_speed_var, command=update_fan_speed_display, length=400).place(relx=0.5, rely=0.3, anchor=tk.CENTER)
-    ttk.Entry(root, textvariable=fan_speed_var, width=10).place(relx=0.5, rely=0.35, anchor=tk.CENTER)
-    ttk.Button(root, text="Set Fan Speed", command=manual_fan_speed).place(relx=0.5, rely=0.4, anchor=tk.CENTER)
-
-    # Spool Motor Speed Controls
-    ttk.Label(root, textvariable=spool_motor_speed_text, background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 14)).place(relx=0.5, rely=0.45, anchor=tk.CENTER)
-    ttk.Scale(root, from_=0, to=100, orient=tk.HORIZONTAL, variable=spool_motor_speed_var, command=update_spool_motor_speed_display, length=400).place(relx=0.5, rely=0.5, anchor=tk.CENTER)
-    ttk.Entry(root, textvariable=spool_motor_speed_var, width=10).place(relx=0.5, rely=0.55, anchor=tk.CENTER)
-    ttk.Button(root, text="Set Spool Speed", command=manual_spool_speed).place(relx=0.5, rely=0.6, anchor=tk.CENTER)
-
-    # SSR State Display
-    ttk.Label(root, textvariable=ssr_state_var, background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 16)).place(relx=0.5, rely=0.65, anchor=tk.CENTER)
-
-    # Timer Components (Set Timer in Minutes)
-    ttk.Label(root, text="Set Timer (minutes):", background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 14)).place(relx=0.3, rely=0.75, anchor=tk.CENTER)
-    global timer_entry
-    timer_entry = ttk.Entry(root, width=10)
-    timer_entry.place(relx=0.5, rely=0.75, anchor=tk.CENTER)
-    ttk.Button(root, text="Start Timer", command=start_timer).place(relx=0.7, rely=0.75, anchor=tk.CENTER)
-
-    global countdown_label
-    countdown_label = ttk.Label(root, text="Time Remaining: 00:00", background=BG_COLOR, foreground=FG_COLOR, font=("Arial", 14))
-    countdown_label.place(relx=0.5, rely=0.8, anchor=tk.CENTER)
-
-    root.protocol("WM_DELETE_WINDOW", on_closing)
-
+# -------------------------------------------------
+# Timer Functions
+# -------------------------------------------------
 def send_shutoff_time(shutoff_seconds):
     try:
         # Use the new command string "SET_SHUTDOWN_TIME:" as expected by the Arduino code.
@@ -402,7 +361,134 @@ def turn_off_all():
     spool_motor_speed_text.set("Spool Motor Speed: 0%")
     messagebox.showinfo("Timer Finished", "All systems have been turned off.")
 
-# Start GUI after COM Port Input
+# -------------------------------------------------
+# Additional Requested Features
+# -------------------------------------------------
+def set_pp():
+    """
+    Sets the temperature to 160°C and fan speed to 10%,
+    leaving spool speed unchanged.
+    """
+    desired_temp_var.set("160")
+    fan_speed_var.set(10)
+    # Send commands
+    send_set_temperature()
+    manual_fan_speed()
+
+def show_about():
+    """Displays the About dialog with version info."""
+    messagebox.showinfo("About", "Version 1.3")
+
+# -------------------------------------------------
+# GUI Creation
+# -------------------------------------------------
+def create_gui():
+    root.title("Filament Machine Control Interface")
+    root.geometry("850x750")
+    root.configure(bg=BG_COLOR)
+
+    setup_styles()  # Apply modern styles to ttk widgets
+
+    # ---------------------------
+    # Menubar Setup
+    # ---------------------------
+    menubar = Menu(root, background=BG_COLOR, foreground=FG_COLOR, activebackground=ACCENT_COLOR)
+    filemenu = Menu(menubar, tearoff=0)
+    filemenu.add_command(label="New", command=donothing)
+    filemenu.add_command(label="Open", command=donothing)
+    filemenu.add_command(label="Save", command=donothing)
+    filemenu.add_command(label="PP", command=set_pp)  # New "PP" option
+    filemenu.add_separator()
+    filemenu.add_command(label="Exit", command=root.quit)
+    menubar.add_cascade(label="File", menu=filemenu)
+
+    helpmenu = Menu(menubar, tearoff=0)
+    helpmenu.add_command(label="Set Timer", command=add_timer_controls)
+    helpmenu.add_command(label="Strip Width", command=calculate_strip_width)
+    helpmenu.add_command(label="Save Widths", command=show_saved_widths)
+    helpmenu.add_command(label="About...", command=show_about)  # Updated to show version
+    menubar.add_cascade(label="Help", menu=helpmenu)
+    root.config(menu=menubar)
+
+    # ---------------------------
+    # Top Frame: Temperature
+    # ---------------------------
+    top_frame = ttk.Frame(root, style="TFrame")
+    top_frame.pack(pady=10, fill="x")
+
+    # Temperature Display
+    ttk.Label(top_frame, textvariable=temp_var, font=TITLE_FONT).pack(pady=5)
+
+    # Temperature Controls (Entry & Buttons)
+    temp_controls_frame = ttk.Frame(top_frame, style="TFrame")
+    temp_controls_frame.pack(pady=5)
+    ttk.Entry(temp_controls_frame, textvariable=desired_temp_var, width=10).pack(side="left", padx=5)
+    ttk.Button(temp_controls_frame, text="Set Temperature", command=send_set_temperature).pack(side="left", padx=5)
+    ttk.Button(temp_controls_frame, text="Eject Device", command=send_eject_command).pack(side="left", padx=5)
+
+    # ---------------------------
+    # Middle Frame: Fan & Spool
+    # ---------------------------
+    middle_frame = ttk.Frame(root, style="TFrame")
+    middle_frame.pack(pady=10, fill="x")
+
+    # Fan Speed Section
+    fan_frame = ttk.Frame(middle_frame, style="TFrame")
+    fan_frame.pack(pady=10, fill="x")
+
+    ttk.Label(fan_frame, textvariable=fan_speed_text, font=DEFAULT_FONT).pack()
+    ttk.Scale(fan_frame, from_=0, to=100, orient=tk.HORIZONTAL,
+              variable=fan_speed_var, command=update_fan_speed_display,
+              style="Horizontal.TScale", length=400).pack(pady=5)
+    fan_controls_frame = ttk.Frame(fan_frame, style="TFrame")
+    fan_controls_frame.pack()
+    ttk.Entry(fan_controls_frame, textvariable=fan_speed_var, width=10).pack(side="left", padx=5)
+    ttk.Button(fan_controls_frame, text="Set Fan Speed", command=manual_fan_speed).pack(side="left", padx=5)
+
+    # Spool Motor Speed Section
+    spool_frame = ttk.Frame(middle_frame, style="TFrame")
+    spool_frame.pack(pady=10, fill="x")
+
+    ttk.Label(spool_frame, textvariable=spool_motor_speed_text, font=DEFAULT_FONT).pack()
+    ttk.Scale(spool_frame, from_=0, to=100, orient=tk.HORIZONTAL,
+              variable=spool_motor_speed_var, command=update_spool_motor_speed_display,
+              style="Horizontal.TScale", length=400).pack(pady=5)
+    spool_controls_frame = ttk.Frame(spool_frame, style="TFrame")
+    spool_controls_frame.pack()
+    ttk.Entry(spool_controls_frame, textvariable=spool_motor_speed_var, width=10).pack(side="left", padx=5)
+    ttk.Button(spool_controls_frame, text="Set Spool Speed", command=manual_spool_speed).pack(side="left", padx=5)
+
+    # ---------------------------
+    # Bottom Frame: SSR & Timer
+    # ---------------------------
+    bottom_frame = ttk.Frame(root, style="TFrame")
+    bottom_frame.pack(pady=10, fill="x")
+
+    # SSR State Display
+    ttk.Label(bottom_frame, textvariable=ssr_state_var, font=TITLE_FONT).pack(pady=5)
+
+    # Timer Controls
+    timer_frame = ttk.Frame(bottom_frame, style="TFrame")
+    timer_frame.pack(pady=5)
+    ttk.Label(timer_frame, text="Set Timer (minutes):", font=DEFAULT_FONT).pack(side="left", padx=5)
+
+    global timer_entry
+    timer_entry = ttk.Entry(timer_frame, width=10)
+    timer_entry.pack(side="left", padx=5)
+
+    ttk.Button(timer_frame, text="Start Timer", command=start_timer).pack(side="left", padx=5)
+
+    # Countdown Label
+    global countdown_label
+    countdown_label = ttk.Label(root, text="Time Remaining: 00:00", font=DEFAULT_FONT)
+    countdown_label.pack(pady=10)
+
+    # Window close event
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+
+# -------------------------------------------------
+# Main Execution
+# -------------------------------------------------
 load_saved_widths()
 arduino_controller.setup_connection()
 create_gui()
